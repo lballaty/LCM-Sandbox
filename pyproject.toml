@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lcm-sandbox"
+version = "0.1.0"
+description = "Isolated git-worktree + Docker sandbox for autonomous agent execution"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Libor Ballaty", email = "libor@labguide.io" }]
+license = { text = "Proprietary" }
+dependencies = [
+    "click>=8.1",
+    "pydantic>=2.5",
+    "python-json-logger>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-mock>=3.12",
+]
+
+[project.scripts]
+lcm-sandbox = "lcm_sandbox.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lcm_sandbox*"]
+exclude = ["lcm_sandbox.tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["lcm_sandbox/tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires real git/docker; skipped by default",
+]
