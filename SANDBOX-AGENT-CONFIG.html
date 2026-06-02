@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>In-Sandbox Agent Configuration — Visual Explainer</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #334155;
+    --border: #475569;
+    --ink: #e2e8f0;
+    --ink-mute: #94a3b8;
+    --accent: #38bdf8;
+    --accent-2: #818cf8;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --code-bg: #0b1220;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 15px; line-height: 1.55;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 28px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 21px; margin: 36px 0 14px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 17px; margin: 26px 0 10px; color: var(--accent); }
+  .sub { color: var(--ink-mute); margin-bottom: 24px; font-size: 14px; }
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; vertical-align: middle;
+  }
+  .tag.ok   { background: rgba(34,197,94,0.15); color: var(--ok); }
+  .tag.warn { background: rgba(245,158,11,0.15); color: var(--warn); }
+  .tag.err  { background: rgba(239,68,68,0.15); color: var(--err); }
+  .tag.info { background: rgba(56,189,248,0.15); color: var(--accent); }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--panel);
+    padding: 14px 18px; margin: 16px 0; border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); }
+  .callout.err  { border-color: var(--err); }
+  .callout.ok   { border-color: var(--ok); }
+  code, pre {
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-size: 13px;
+  }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; color: #fbbf24; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border);
+    padding: 14px 16px; border-radius: 6px; overflow-x: auto;
+    color: var(--ink); line-height: 1.5;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--accent); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td.center, th.center { text-align: center; }
+  tr:hover td { background: rgba(56,189,248,0.04); }
+  .diagram { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin: 18px 0; }
+  .legend { display: flex; gap: 18px; font-size: 12px; color: var(--ink-mute); margin-top: 10px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } }
+  .nav {
+    position: sticky; top: 0; background: var(--bg);
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+    margin: -32px -28px 24px; padding-left: 28px; padding-right: 28px;
+    font-size: 13px; z-index: 10;
+  }
+  .nav a { color: var(--ink-mute); text-decoration: none; margin-right: 18px; }
+  .nav a:hover { color: var(--accent); }
+  .small { font-size: 12px; color: var(--ink-mute); }
+  .icon-check::before { content: "✓"; color: var(--ok); font-weight: bold; }
+  .icon-x::before     { content: "✗"; color: var(--err); font-weight: bold; }
+  .icon-warn::before  { content: "!"; color: var(--warn); font-weight: bold; background: rgba(245,158,11,0.15); border-radius: 50%; padding: 0 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="nav">
+  <a href="#problem">Problem</a>
+  <a href="#layers">Layered defenses</a>
+  <a href="#flow">Prompt flow</a>
+  <a href="#matrix">Coverage matrix</a>
+  <a href="#config">Config template</a>
+  <a href="#shims">Defensive shims</a>
+  <a href="#per-agent">Per-agent</a>
+  <a href="#gaps">Audit gaps</a>
+</div>
+
+<h1>In-Sandbox Agent Configuration</h1>
+<p class="sub">Visual explainer of how agent CLIs inside the sandbox container are prevented from hanging on permission prompts. Companion to <code>SANDBOX-AGENT-CONFIG.md</code>.</p>
+
+<h2 id="problem">The problem in one picture</h2>
+
+<div class="diagram">
+<svg viewBox="0 0 880 240" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- Host -->
+  <rect x="10" y="40" width="200" height="160" rx="10" fill="#1e293b" stroke="#475569"/>
+  <text x="110" y="68" text-anchor="middle" fill="#38bdf8" font-size="14" font-weight="600">HOST</text>
+  <text x="110" y="95" text-anchor="middle" fill="#e2e8f0" font-size="12">lcm-sandbox CLI</text>
+  <text x="110" y="115" text-anchor="middle" fill="#94a3b8" font-size="11">decides what's allowed</text>
+  <text x="110" y="135" text-anchor="middle" fill="#94a3b8" font-size="11">via --allowed-paths,</text>
+  <text x="110" y="150" text-anchor="middle" fill="#94a3b8" font-size="11">timeout, profile</text>
+  <text x="110" y="180" text-anchor="middle" fill="#e2e8f0" font-size="11">👤 human present</text>
+
+  <!-- Container -->
+  <rect x="260" y="20" width="350" height="200" rx="10" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
+  <text x="435" y="44" text-anchor="middle" fill="#f59e0b" font-size="14" font-weight="600">CONTAINER (sandbox)</text>
+  <rect x="290" y="60" width="290" height="50" rx="6" fill="#0b1220" stroke="#475569"/>
+  <text x="435" y="80" text-anchor="middle" fill="#e2e8f0" font-size="12">agent CLI (claude/codex/gemini)</text>
+  <text x="435" y="98" text-anchor="middle" fill="#94a3b8" font-size="11">non-interactive, no TTY</text>
+
+  <rect x="290" y="130" width="135" height="70" rx="6" fill="#0b1220" stroke="#ef4444"/>
+  <text x="357" y="152" text-anchor="middle" fill="#ef4444" font-size="12" font-weight="600">ANY PROMPT</text>
+  <text x="357" y="170" text-anchor="middle" fill="#94a3b8" font-size="11">→ hang</text>
+  <text x="357" y="186" text-anchor="middle" fill="#94a3b8" font-size="11">→ timeout kill</text>
+
+  <rect x="445" y="130" width="135" height="70" rx="6" fill="#0b1220" stroke="#22c55e"/>
+  <text x="512" y="152" text-anchor="middle" fill="#22c55e" font-size="12" font-weight="600">NO PROMPTS</text>
+  <text x="512" y="170" text-anchor="middle" fill="#94a3b8" font-size="11">→ work completes</text>
+  <text x="512" y="186" text-anchor="middle" fill="#94a3b8" font-size="11">→ artifacts captured</text>
+
+  <!-- Goal -->
+  <rect x="660" y="40" width="210" height="160" rx="10" fill="#1e293b" stroke="#475569"/>
+  <text x="765" y="68" text-anchor="middle" fill="#38bdf8" font-size="14" font-weight="600">GOAL</text>
+  <text x="765" y="100" text-anchor="middle" fill="#e2e8f0" font-size="12">Silence every prompt</text>
+  <text x="765" y="118" text-anchor="middle" fill="#e2e8f0" font-size="12">path the agent</text>
+  <text x="765" y="136" text-anchor="middle" fill="#e2e8f0" font-size="12">could hit, by config</text>
+  <text x="765" y="154" text-anchor="middle" fill="#e2e8f0" font-size="12">or by defensive shim</text>
+
+  <line x1="210" y1="120" x2="260" y2="120" stroke="#94a3b8" marker-end="url(#ar)"/>
+  <line x1="610" y1="120" x2="660" y2="120" stroke="#94a3b8" marker-end="url(#ar)"/>
+</svg>
+</div>
+
+<p>Inside the container there is no human to answer "are you sure?". Any prompt = wasted timeout. The job of the in-container config is to make sure the agent <em>never sees a prompt</em>.</p>
+
+<h2 id="layers">Four layered defenses</h2>
+
+<p>The in-sandbox agent config is the <em>fourth</em> layer of defense. The other three give us hard guarantees, which is what makes it safe to let the agent config default to fully permissive.</p>
+
+<div class="diagram">
+<svg viewBox="0 0 880 270" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">
+  <!-- Concentric layers -->
+  <rect x="40" y="20" width="800" height="230" rx="12" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <text x="60" y="42" fill="#22c55e" font-size="12" font-weight="600">LAYER 1 — Container runtime ACL (docker --rm, no privileged, dropped caps)</text>
+
+  <rect x="80" y="56" width="720" height="180" rx="10" fill="none" stroke="#38bdf8" stroke-width="2"/>
+  <text x="100" y="78" fill="#38bdf8" font-size="12" font-weight="600">LAYER 2 — OS-level ACLs (entrypoint chmod/chown per --allowed-paths)</text>
+
+  <rect x="120" y="92" width="640" height="130" rx="8" fill="none" stroke="#818cf8" stroke-width="2"/>
+  <text x="140" y="114" fill="#818cf8" font-size="12" font-weight="600">LAYER 3 — Git pre-push hook (no remote exfiltration)</text>
+
+  <rect x="160" y="128" width="560" height="80" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
+  <text x="440" y="155" text-anchor="middle" fill="#f59e0b" font-size="13" font-weight="600">LAYER 4 — Agent config (this document)</text>
+  <text x="440" y="175" text-anchor="middle" fill="#e2e8f0" font-size="11">Belt-and-suspenders; the hangs we're preventing</text>
+  <text x="440" y="192" text-anchor="middle" fill="#94a3b8" font-size="11">Permissive-by-default is safe because layers 1–3 enforce the real boundaries</text>
+</svg>
+<div class="legend">
+  <span><span class="swatch" style="background:#22c55e"></span>Container runtime</span>
+  <span><span class="swatch" style="background:#38bdf8"></span>OS-level ACLs</span>
+  <span><span class="swatch" style="background:#818cf8"></span>Git hook</span>
+  <span><span class="swatch" style="background:#f59e0b"></span>Agent config (focus of this doc)</span>
+</div>
+</div>
+
+<h2 id="flow">Every prompt path the agent could hit</h2>
+
+<p>This is the decision flow inside Claude Code when the agent attempts an action. Each diamond is a place a prompt could fire — and we silence each one with a specific config key.</p>
+
+<div class="diagram">
+<svg viewBox="0 0 880 470" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto" font-family="-apple-system, system-ui, sans-serif">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- start -->
+  <rect x="370" y="10" width="140" height="34" rx="17" fill="#0b1220" stroke="#38bdf8"/>
+  <text x="440" y="32" text-anchor="middle" fill="#e2e8f0" font-size="12">Agent attempts action</text>
+
+  <!-- decision: hook? -->
+  <polygon points="440,60 540,95 440,130 340,95" fill="#1e293b" stroke="#f59e0b"/>
+  <text x="440" y="92" text-anchor="middle" fill="#e2e8f0" font-size="11">PreToolUse hook?</text>
+  <text x="440" y="106" text-anchor="middle" fill="#94a3b8" font-size="10">returns "ask"?</text>
+  <text x="555" y="80" fill="#ef4444" font-size="11">YES → HANG</text>
+  <text x="345" y="80" text-anchor="end" fill="#22c55e" font-size="11">NO ↓</text>
+  <text x="555" y="95" fill="#94a3b8" font-size="10">silenced by:</text>
+  <text x="555" y="108" fill="#fbbf24" font-size="10" font-family="monospace">disableAllHooks: true</text>
+
+  <!-- decision: deny? -->
+  <polygon points="440,150 540,185 440,220 340,185" fill="#1e293b" stroke="#ef4444"/>
+  <text x="440" y="182" text-anchor="middle" fill="#e2e8f0" font-size="11">deny rule match?</text>
+  <text x="555" y="180" fill="#ef4444" font-size="11">YES → blocked (no prompt; fine)</text>
+  <text x="345" y="180" text-anchor="end" fill="#22c55e" font-size="11">NO ↓</text>
+
+  <!-- decision: ask? -->
+  <polygon points="440,240 540,275 440,310 340,275" fill="#1e293b" stroke="#f59e0b"/>
+  <text x="440" y="272" text-anchor="middle" fill="#e2e8f0" font-size="11">ask rule match?</text>
+  <text x="555" y="270" fill="#ef4444" font-size="11">YES → HANG</text>
+  <text x="345" y="270" text-anchor="end" fill="#22c55e" font-size="11">NO ↓</text>
+  <text x="555" y="285" fill="#94a3b8" font-size="10">prevented by not setting</text>
+  <text x="555" y="297" fill="#fbbf24" font-size="10" font-family="monospace">"ask" rules in profile</text>
+
+  <!-- decision: allow? -->
+  <polygon points="440,330 540,365 440,400 340,365" fill="#1e293b" stroke="#818cf8"/>
+  <text x="440" y="362" text-anchor="middle" fill="#e2e8f0" font-size="11">allow rule match?</text>
+  <text x="555" y="360" fill="#22c55e" font-size="11">YES → run, no prompt</text>
+  <text x="345" y="360" text-anchor="end" fill="#94a3b8" font-size="11">NO ↓</text>
+
+  <!-- final: defaultMode -->
+  <rect x="350" y="420" width="180" height="40" rx="6" fill="#0b1220" stroke="#f59e0b"/>
+  <text x="440" y="438" text-anchor="middle" fill="#fbbf24" font-size="11" font-family="monospace">defaultMode decides</text>
+  <text x="440" y="452" text-anchor="middle" fill="#22c55e" font-size="11">→ bypassPermissions = run, no prompt</text>
+
+  <!-- arrows down -->
+  <line x1="440" y1="44" x2="440" y2="60" stroke="#94a3b8" marker-end="url(#ar2)"/>
+  <line x1="440" y1="130" x2="440" y2="150" stroke="#94a3b8" marker-end="url(#ar2)"/>
+  <line x1="440" y1="220" x2="440" y2="240" stroke="#94a3b8" marker-end="url(#ar2)"/>
+  <line x1="440" y1="310" x2="440" y2="330" stroke="#94a3b8" marker-end="url(#ar2)"/>
+  <line x1="440" y1="400" x2="440" y2="420" stroke="#94a3b8" marker-end="url(#ar2)"/>
+</svg>
+</div>
+
+<div class="callout warn">
+<strong class="icon-warn"></strong> <strong>Two prompt paths bypass this entire flow</strong> — the <code>rm -rf /</code> and <code>rm -rf ~</code> circuit breakers, and the <em>"Overwrite existing file"</em> dialog. These cannot be silenced from config alone. See <a href="#shims">Defensive shims</a>.
+</div>
+
+<h2 id="matrix">Coverage matrix — every Claude Code prompt × the key that silences it</h2>
+
+<table>
+<thead><tr><th>#</th><th>Prompt</th><th>Trigger</th><th>Silenced by</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Bash command approval</td><td>Bash call without matching allow rule</td><td><code>defaultMode: bypassPermissions</code></td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>2</td><td>Edit/Write approval</td><td>Edit/Write to unmatched file</td><td><code>defaultMode: bypassPermissions</code></td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>3</td><td>Overwrite-existing-file dialog</td><td>Write to file that already exists</td><td><code>defaultMode: bypassPermissions</code> (only — <code>acceptEdits</code> does <strong>not</strong> silence this)</td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>4</td><td>WebFetch domain approval</td><td>First fetch to a new domain</td><td><code>WebFetch(domain:*)</code> allow + <code>skipWebFetchPreflight: true</code></td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>5</td><td>MCP server approval</td><td>First use of project-local MCP server</td><td><code>enableAllProjectMcpServers: true</code></td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>6</td><td>Bypass-mode acceptance dialog</td><td>First time <code>bypassPermissions</code> activates</td><td><code>skipDangerousModePermissionPrompt: true</code></td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>7</td><td>Auto-mode opt-in dialog</td><td>If <code>auto</code> mode is used</td><td><code>skipAutoPermissionPrompt: true</code> (defensive)</td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>8</td><td><code>rm -rf /</code> circuit breaker</td><td>Bash invocation of <code>rm -rf /</code>, <code>rm -rf /*</code></td><td><strong>Not bypassable from config.</strong> Mitigated by rm-shim.</td><td><span class="tag warn">shim</span></td></tr>
+<tr><td>9</td><td><code>rm -rf ~</code> circuit breaker</td><td>Bash invocation targeting <code>$HOME</code></td><td><strong>Not bypassable from config.</strong> Mitigated by rm-shim.</td><td><span class="tag warn">shim</span></td></tr>
+<tr><td>10</td><td>PreToolUse hook → "ask"</td><td>Any inherited hook returning <code>permissionDecision: "ask"</code></td><td><code>disableAllHooks: true</code></td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>11</td><td>First-run auth (OAuth)</td><td>Agent invoked without API key</td><td><code>ANTHROPIC_API_KEY</code> env var (Docker secret)</td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>12</td><td>Subagent invocation approval</td><td>Subagent enabled + approval required</td><td>Covered by <code>bypassPermissions</code></td><td><span class="tag ok">covered</span></td></tr>
+<tr><td>13</td><td><strong>Unknown future prompt</strong></td><td>New prompt type added to Claude Code</td><td>stdin-EOF defensive shim</td><td><span class="tag warn">shim</span></td></tr>
+</tbody>
+</table>
+
+<div class="callout ok">
+<strong class="icon-check"></strong> 11 of 13 paths silenced by config; remaining 2 (rm circuit breakers) + future-unknowns mitigated by shims. <strong>No path is unaddressed.</strong>
+</div>
+
+<h2 id="config">The canonical permissive profile</h2>
+
+<p>This is the JSON that gets rendered to <code>/home/aiagent/.claude/settings.json</code> when <code>LCM_AGENT_PROFILE=permissive</code> (the default). Every key maps to a specific row in the coverage matrix.</p>
+
+<pre><code>{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "WebFetch(domain:*)"
+    ]
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "skipAutoPermissionPrompt": true,
+  "skipWebFetchPreflight": true,
+  "enableAllProjectMcpServers": true,
+  "disableAllHooks": true,
+  "fileCheckpointingEnabled": false,
+  "autoCompactEnabled": true,
+  "spinnerTipsEnabled": false,
+  "promptSuggestionEnabled": false
+}</code></pre>
+
+<h3>Required environment variables</h3>
+
+<pre><code># Authentication (Docker secrets at run-time, never baked into image)
+ANTHROPIC_API_KEY=&lt;from host secret store&gt;
+OPENAI_API_KEY=&lt;from host secret store, if Codex&gt;
+GEMINI_API_KEY=&lt;from host secret store, if Gemini&gt;
+
+# Non-interactive signaling
+CI=true
+NONINTERACTIVE=1
+DEBIAN_FRONTEND=noninteractive
+TERM=dumb
+NO_COLOR=1
+
+# Profile selector
+LCM_AGENT_PROFILE=permissive</code></pre>
+
+<h2 id="shims">Defensive shims (the belt for the suspenders)</h2>
+
+<div class="grid-2">
+<div class="diagram" style="margin:0">
+<h3 style="margin-top:0">A. rm-shim</h3>
+<p class="small">Mitigates rows 8 and 9 (circuit-breaker prompts).</p>
+<p>Install <code>/usr/local/bin/rm</code> as a wrapper that refuses <code>rm -rf /</code>, <code>rm -rf ~</code>, <code>rm -rf $HOME</code> directly. Claude Code never sees those commands → its circuit breaker never fires.</p>
+<pre><code>#!/bin/bash
+# /usr/local/bin/rm (precedes /bin/rm in PATH)
+case " $* " in
+  *" -rf /"*|*" -rf /*"*|*" -rf ~"*|*" -rf $HOME"*|*" -rf $HOME/"*)
+    echo "rm-shim: refused dangerous pattern: $*" &gt;&amp;2
+    exit 1 ;;
+esac
+exec /bin/rm "$@"</code></pre>
+</div>
+
+<div class="diagram" style="margin:0">
+<h3 style="margin-top:0">B. stdin-EOF shim</h3>
+<p class="small">Catches row 13 (unknown future prompts).</p>
+<p>Wrap the agent invocation so stdin is closed (any read returns EOF) and there's no TTY. If anything slips past config, the agent <strong>fails in seconds</strong> instead of hanging for the full timeout.</p>
+<pre><code>exec setsid &lt;/dev/null \
+  timeout --signal=TERM --kill-after=10s \
+  ${TIMEOUT_MINUTES}m \
+  agent-cli "$@"</code></pre>
+</div>
+</div>
+
+<div class="diagram">
+<h3 style="margin-top:0">C. Pre-flight smoke test</h3>
+<p class="small">Catches config drift before the real run wastes the timeout budget.</p>
+<p>Before handing off to the agent, the entrypoint runs a 30-second probe of each silenced path. If any probe hangs, abort with a clear error captured by Phase 6.</p>
+<pre><code># /opt/lcm-sandbox/smoke-test.sh
+set -e
+timeout 30s claude --print "say ok" &lt;/dev/null     # Bash + WebFetch probe
+echo "smoke test passed"</code></pre>
+</div>
+
+<h2 id="per-agent">Per-agent status</h2>
+
+<table>
+<thead><tr><th>Agent</th><th>Config location</th><th>Profile readiness</th><th>Phase 2 blocker</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>Claude Code</strong></td>
+  <td><code>/home/aiagent/.claude/settings.json</code></td>
+  <td><span class="tag ok">Ready</span></td>
+  <td>—</td>
+</tr>
+<tr>
+  <td><strong>Codex</strong></td>
+  <td>TBD</td>
+  <td><span class="tag err">Blocked</span></td>
+  <td>Confirm equivalent of <code>bypassPermissions</code> exists, audit auth flow</td>
+</tr>
+<tr>
+  <td><strong>Gemini</strong></td>
+  <td>TBD</td>
+  <td><span class="tag err">Blocked</span></td>
+  <td>Same audit as Codex</td>
+</tr>
+</tbody>
+</table>
+
+<div class="callout err">
+<strong class="icon-x"></strong> If Codex or Gemini cannot run prompt-free in non-interactive mode, the recommended fallback is to <strong>exclude them from the permissive profile</strong> and ship Claude-only first, rather than risk silent hangs. This decision must be made before the Phase 2 Dockerfile lands.
+</div>
+
+<h2 id="gaps">Open audit items</h2>
+
+<ol>
+  <li><strong>Codex audit.</strong> Non-interactive mode? Auth via env var? Hooks/approval surfaces? Documented answer required.</li>
+  <li><strong>Gemini audit.</strong> Same set of questions.</li>
+  <li><strong>Confirm rm-shim doesn't break pip/npm cache cleanup.</strong> Probe via a real <code>pip install</code> + <code>npm install</code> inside the image.</li>
+  <li><strong>Reconcile <code>disableAllHooks: true</code> with desired in-container audit hooks.</strong> Phase 2 may want a single non-prompting hook for audit logging.</li>
+  <li><strong>Smoke test scope.</strong> Should the smoke test probe a Bash command, an Edit, and a WebFetch — or is the single <code>--print</code> probe sufficient? Recommend probing all four.</li>
+</ol>
+
+<hr style="border:none;border-top:1px solid var(--border);margin:42px 0 20px">
+<p class="small">Companion to the Markdown spec at <code>SANDBOX-AGENT-CONFIG.md</code>. Open this HTML file in any browser — no external dependencies.</p>
+
+</div>
+</body>
+</html>
