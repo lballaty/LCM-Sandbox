@@ -58,6 +58,12 @@ lcm-sandbox cleanup --sandbox-id sandbox-run_xxx-...
 - **[SANDBOX-ARCHITECTURE.md](./SANDBOX-ARCHITECTURE.md)** — High-level workflows, container internals, data flows, threat model
 - **[SANDBOX-DETAILED-FLOW.md](./SANDBOX-DETAILED-FLOW.md)** — Phase-by-phase execution with exact bash commands, error handling, verification steps
 - **[IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md)** — Build roadmap, component breakdown, timeline (4-5 weeks)
+- **[AGENT-INSTRUCTIONS.md](./AGENT-INSTRUCTIONS.md)** — Phased delivery guide for autonomous agent implementation
+- **[SANDBOX-AGENT-CONFIG.md](./SANDBOX-AGENT-CONFIG.md)** + **[.html](./SANDBOX-AGENT-CONFIG.html)** — In-sandbox agent permission profile (silencing every prompt path)
+- **[SANDBOX-IMAGE-TOOLCHAIN.md](./SANDBOX-IMAGE-TOOLCHAIN.md)** — Phase 2 Dockerfile design (universal image, ~1 GB target)
+- **[SANDBOX-ORCHESTRATION.md](./SANDBOX-ORCHESTRATION.md)** + **[.html](./SANDBOX-ORCHESTRATION.html)** — Secure live IPC channel (MCP Streamable HTTP, OAuth 2.1 per-run tokens)
+- **[SANDBOX-FLOWS.html](./SANDBOX-FLOWS.html)** — End-to-end mermaid flows: direct CLI / AIDevOps UI / AIDevOps programmatic, plus cleanup, failure, and state machine
+- **[SESSION-HANDOFF.md](./SESSION-HANDOFF.md)** — Resume-from-here doc for the next session
 
 ### Key Concepts
 
@@ -122,16 +128,17 @@ Artifacts stored in DB for audit trail.
 
 ---
 
-## Status: In Development
+## Status
 
-This project is in **early development** phase. Expected timeline:
-- **Week 1-2**: Core CLI + worktree/sync/docker phases
-- **Week 2-3**: Docker integration + container launch
-- **Week 3**: Artifact capture + cleanup
-- **Week 4**: Docs, tests, packaging
-- **Week 5** (optional): AIDevOps integration
+| Phase | Scope | Status |
+| :---- | :---- | :----- |
+| 1 | Core CLI + Phases 0–3 (preflight, worktree, sync, docker image check) | ✅ **Done** — 43/43 tests passing, sanity-checked end-to-end |
+| 2 | Docker integration + container launch + entrypoint (STEP 4.5) | ⬜ Designed (see toolchain + agent-config docs); not implemented |
+| 3 | Artifact capture + cleanup | ⬜ Stub exists; full implementation pending |
+| 4 | Docs, packaging, E2E tests | ⬜ Partial — design docs complete; pip packaging TBD |
+| 5 | AIDevOps integration + live MCP channel | ⬜ Designed (see orchestration + flows docs); not implemented |
 
-See [IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md) for detailed roadmap.
+See [SESSION-HANDOFF.md](./SESSION-HANDOFF.md) and [IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md) for resume-from-here details.
 
 ---
 

@@ -661,3 +661,17 @@ brew install lcm-sandbox
 - **Week 5** (optional): AIDevOps integration
 
 **Total**: 4 weeks for MVP, 5 weeks with AIDevOps integration
+
+---
+
+## Implementation Status (Updated 2026-06-02)
+
+| Phase | Scope | Status |
+| :---- | :---- | :----- |
+| 1 | Core CLI + Phases 0–3 (preflight, worktree, sync, docker image check) | ✅ **Complete** — 43/43 unit tests passing; end-to-end sanity-checked against temp git repo |
+| 2 | Docker integration + container launch + STEP 4.5 entrypoint | ⬜ **Designed** — see `SANDBOX-AGENT-CONFIG.md`, `SANDBOX-IMAGE-TOOLCHAIN.md`. Implementation pending. |
+| 3 | Artifact capture + cleanup command | ⬜ Stub exists; full STEP 6 implementation pending |
+| 4 | Docs + packaging + E2E tests | ⬜ Design docs complete; pip packaging + E2E TBD |
+| 5 | AIDevOps integration + live MCP back-channel | ⬜ **Designed** — see `SANDBOX-ORCHESTRATION.md`, `SANDBOX-FLOWS.html`. Implementation pending. |
+
+**Resume point:** Phase 2 Dockerfile + entrypoint. See `SESSION-HANDOFF.md` for the exact pickup state and `SANDBOX-AGENT-CONFIG.md` + `SANDBOX-IMAGE-TOOLCHAIN.md` for the inputs the implementation needs.
