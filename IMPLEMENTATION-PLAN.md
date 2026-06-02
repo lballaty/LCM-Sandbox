@@ -675,3 +675,20 @@ brew install lcm-sandbox
 | 5 | AIDevOps integration + live MCP back-channel | ⬜ **Designed** — see `SANDBOX-ORCHESTRATION.md`, `SANDBOX-FLOWS.html`. Implementation pending. |
 
 **Resume point:** Phase 2 Dockerfile + entrypoint. See `SESSION-HANDOFF.md` for the exact pickup state and `SANDBOX-AGENT-CONFIG.md` + `SANDBOX-IMAGE-TOOLCHAIN.md` for the inputs the implementation needs.
+
+### Pre-Phase-2 verification gates
+
+Before Phase 5 implementation can start (and to inform the Phase 2 entrypoint's `.mcp.json` handling), verify the following against the installed Claude Code version:
+- GitHub `anthropics/claude-code` **issue #28293** — custom auth headers in `.mcp.json` forwarded on every POST? Blocks the bearer-in-header pattern if still open.
+- GitHub `anthropics/claude-code` **issue #36665** — server-push notifications support? Determines whether Phase 5 can rely on `elicitation/create` / `notifications/*` or must use the polling fallback (`get_more_context()` heartbeat).
+
+### Cross-repo follow-ups
+
+- `openrouter-agent/docs/lcm-sandbox-integration.md` currently documents the spawn-and-wait integration model. When Phase 5 lands, that doc must be updated to reflect the live MCP back-channel design (see `SANDBOX-ORCHESTRATION.md`).
+- Consumer repos with `.aidevops/` directories (`go-madeira`, `arionetworks-website`, `ballaty-rentals`) should be sampled for existing `.mcp.json` content before the Phase 2 entrypoint sanitize step is finalized.
+
+### Deferred items (still tracked)
+
+- **Codex CLI audit + image variant** — Codex's non-interactive mode support is unverified; until then, the universal image ships Claude-only.
+- **Gemini CLI audit + image variant** — same as Codex.
+- **`CHANGELOG.md`** — does not exist; start using one when Phase 2 work begins.

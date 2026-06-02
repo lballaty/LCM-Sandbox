@@ -117,67 +117,81 @@ Project allow list scopes `rm` narrowly (only inside repo + `/tmp/lcm-*`, `/tmp/
 
 ---
 
-## File inventory (current state)
+## File inventory (current state, post-Phase-1)
 
 ```
 LCM-Sandbox/
 ├── .claude/
-│   ├── settings.json              (configured for autonomous work)
-│   └── settings.local.json        (unchanged; user-private)
-├── AGENT-INSTRUCTIONS.md
-├── IMPLEMENTATION-PLAN.md
-├── README.md
-├── SANDBOX-ARCHITECTURE.md
-├── SANDBOX-DETAILED-FLOW.md
+│   ├── settings.json              ✓ committed (project-shared, scoped allow/deny)
+│   └── settings.local.json        — gitignored (personal)
+├── .gitignore                     ✓ committed
+├── AGENT-INSTRUCTIONS.md          (pre-existing)
+├── IMPLEMENTATION-PLAN.md         ✓ updated this session (status table appended)
+├── README.md                      ✓ updated this session (status + doc index)
+├── SANDBOX-ARCHITECTURE.md        (pre-existing)
+├── SANDBOX-DETAILED-FLOW.md       (pre-existing — STEP 1.1.3 minor deviation noted in code)
+├── SANDBOX-AGENT-CONFIG.md / .html  ✓ new this session (Phase 2 design)
+├── SANDBOX-IMAGE-TOOLCHAIN.md     ✓ new this session (Phase 2 design)
+├── SANDBOX-ORCHESTRATION.md / .html ✓ new this session (Phase 5 design)
+├── SANDBOX-FLOWS.html             ✓ new this session (mermaid flows)
 ├── SESSION-HANDOFF.md             (this file)
-├── pyproject.toml                 (complete)
-└── lcm_sandbox/
-    ├── __init__.py                ✓ (version + docstring)
-    ├── cli.py                     ☐ (empty stub)
-    ├── exceptions.py              ✓ (all error classes)
-    ├── commands/
-    │   ├── __init__.py            ☐ (empty stub)
-    │   └── create.py              ☐ (empty stub)
-    ├── core/
-    │   ├── __init__.py            ☐ (empty stub)
-    │   ├── preflight.py           ☐ (empty stub)
-    │   ├── worktree.py            ☐ (empty stub)
-    │   ├── sync.py                ☐ (empty stub)
-    │   └── docker_builder.py      ☐ (empty stub)
-    ├── models/
-    │   ├── __init__.py            ✓ (exports)
-    │   ├── sandbox_config.py      ✓ (SandboxConfig, AllowedPaths)
-    │   └── artifact.py            ✓ (Phase1Result, WorktreeBaseline)
-    ├── utils/
-    │   ├── __init__.py            ✓ (docstring)
-    │   ├── shell.py               ✓ (run, CommandResult)
-    │   ├── logger.py              ✓ (configure, get_logger)
-    │   ├── git.py                 ☐ (empty stub)
-    │   └── docker.py              ☐ (empty stub)
-    └── tests/
-        ├── __init__.py            ☐ (empty stub)
-        ├── conftest.py            ☐ (empty stub)
-        ├── test_preflight.py      ☐ (empty stub)
-        ├── test_worktree.py       ☐ (empty stub)
-        ├── test_sync.py           ☐ (empty stub)
-        ├── test_docker_builder.py ☐ (empty stub)
-        ├── test_models.py         ☐ (empty stub)
-        └── test_utils.py          ☐ (empty stub)
+├── pyproject.toml                 ✓ committed
+└── lcm_sandbox/                   ✓ ALL implemented, 43/43 tests passing
+    ├── __init__.py
+    ├── cli.py                     ✓ click entry point, --skip-docker / Phase-5 flags pending
+    ├── exceptions.py              ✓
+    ├── commands/create.py         ✓ orchestrates Phases 0-3
+    ├── core/preflight.py          ✓ 8 checks (3,4,8 skippable via --skip-docker)
+    ├── core/worktree.py           ✓ STEP 1.1 + 1.2; --track flag dropped vs spec
+    ├── core/sync.py               ✓ STEP 2.1-2.6
+    ├── core/docker_builder.py     ✓ STEP 3.1 + 3.2
+    ├── models/                    ✓ SandboxConfig, AllowedPaths, Phase1Result, WorktreeBaseline
+    ├── utils/                     ✓ shell, git, docker, logger
+    └── tests/                     ✓ 43 tests (models, utils, preflight, worktree, sync, docker_builder)
 ```
-
-✓ = implemented, ☐ = stub only
 
 ---
 
-## Open task list (from in-session TaskCreate)
+## Phase 1 task list — closed
 
-- [x] #1 Phase 1.1: Package scaffolding + dependencies
-- [x] #2 Phase 1.2: Models (Pydantic)
-- [ ] #3 Phase 1.3: Utils (shell, git, docker, logger) — shell + logger done; git + docker remaining
-- [ ] #4 Phase 1.4: Core/preflight (Phase 0 — 8 checks)
-- [ ] #5 Phase 1.5: Core/worktree (Phase 1)
-- [ ] #6 Phase 1.6: Core/sync (Phase 2)
-- [ ] #7 Phase 1.7: Core/docker_builder (Phase 3)
-- [ ] #8 Phase 1.8: CLI + create command orchestrator
-- [ ] #9 Phase 1.9: Unit tests
-- [ ] #10 Phase 1.10: Manual integration sanity check
+All 10 Phase 1 tasks complete. All 4 follow-up tasks (#11 revert temp perms, #12 agent profile design, #13 toolchain design, #14 agent profile revisions + HTML, #15 MCP audit, #16 orchestration channel design, #17 flows HTML) also complete.
+
+## Open follow-ups for next session (priority order)
+
+### Pre-Phase-2 verification gates
+- [ ] Verify GitHub claude-code issue **#28293** (`.mcp.json` custom auth headers may not be forwarded on every POST) is fixed in installed Claude Code version — **blocks the Phase 5 bearer-in-header design**.
+- [ ] Check GitHub claude-code issue **#36665** (server-push notifications request) status — informs whether Phase 5 can rely on `elicitation/create` and `notifications/*` or must use the polling fallback (`get_more_context()` heartbeat).
+- [ ] On a real consumer repo (e.g. `go-madeira`, `arionetworks-website`, `ballaty-rentals`), verify whether `.mcp.json` exists and what's in it; the entrypoint's sanitize step needs a real-world test case.
+
+### Phase 2 (Dockerfile + entrypoint + launcher)
+- [ ] Write `docker/Dockerfile` per `SANDBOX-IMAGE-TOOLCHAIN.md`.
+- [ ] Write `scripts/docker-entrypoint.sh` implementing STEP 4.5 + the in-sandbox config application from `SANDBOX-AGENT-CONFIG.md`.
+- [ ] Write `scripts/docker-git-hooks.sh` (pre-push deny hook).
+- [ ] Write `scripts/rm-shim.sh`, `scripts/smoke-test.sh`, `scripts/apply_agent_profile.py`, and `lcm_sandbox/templates/agent_profiles/{permissive,standard}.json`.
+- [ ] Implement `lcm_sandbox/core/docker_launcher.py` (STEP 4.1-4.4 + monitoring).
+- [ ] Add `--cap-drop=ALL --security-opt=no-new-privileges --read-only` to the docker run flags.
+- [ ] Add `--mcp-endpoint`, `--mcp-token-file`, `--egress-allowlist` CLI flags (forward into the container as env/secret mounts).
+- [ ] Integration tests: real container launch, file ACL enforcement, git push blocked.
+
+### Phase 3 (artifact capture + cleanup)
+- [ ] Implement `lcm_sandbox/core/artifact_capture.py` per STEP 6.
+- [ ] Add `cleanup` and `status` CLI subcommands.
+- [ ] S3 or filesystem archival for artifacts.
+
+### Phase 4 (docs + packaging)
+- [ ] `USAGE.md`, `TROUBLESHOOTING.md`.
+- [ ] E2E test suite.
+- [ ] pip packaging + distribution.
+- [ ] Create `CHANGELOG.md` (does not exist; flagged as a tracker gap).
+
+### Phase 5 (AIDevOps integration) — depends on #28293 verification
+- [ ] AIDevOps-side: MCP server exposing the 8 tools, OAuth 2.1 token issuer with audience binding + revocation, per-run docker network egress allowlist (iptables or CNI), audit log sink, workflow gates consuming `request_human_approval`.
+- [ ] AIDevOps-side: add `JOB_HANDLERS['platform:sandbox-run']` per the integration doc.
+- [ ] AIDevOps-side: update `openrouter-agent/docs/lcm-sandbox-integration.md` to reflect the live MCP channel (currently describes spawn-and-wait only).
+- [ ] PR-merge webhook → `lcm-sandbox cleanup` wiring.
+
+### Deferred (explicitly)
+- **Codex CLI audit** — Codex's equivalent of `bypassPermissions` is unknown. Until audited, Codex stays out of the image. Tracked in `SANDBOX-AGENT-CONFIG.md` open audit items.
+- **Gemini CLI audit** — same as Codex.
+- **Per-project Docker images** — universal image first; pivot via `--image-tag` flag later if needed.
+- **`CHANGELOG.md` / `CONTRIBUTING.md`** — low priority pre-public.
