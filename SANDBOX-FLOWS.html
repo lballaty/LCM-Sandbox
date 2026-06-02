@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LCM-Sandbox — End-to-End Flows</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #334155;
+    --border: #475569;
+    --ink: #e2e8f0;
+    --ink-mute: #94a3b8;
+    --accent: #38bdf8;
+    --accent-2: #818cf8;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --code-bg: #0b1220;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 15px; line-height: 1.55;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 28px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 21px; margin: 36px 0 14px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 17px; margin: 26px 0 10px; color: var(--accent); }
+  .sub { color: var(--ink-mute); margin-bottom: 24px; font-size: 14px; }
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; vertical-align: middle;
+  }
+  .tag.ok   { background: rgba(34,197,94,0.15); color: var(--ok); }
+  .tag.warn { background: rgba(245,158,11,0.15); color: var(--warn); }
+  .tag.err  { background: rgba(239,68,68,0.15); color: var(--err); }
+  .tag.info { background: rgba(56,189,248,0.15); color: var(--accent); }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--panel);
+    padding: 14px 18px; margin: 16px 0; border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--warn); }
+  .callout.err  { border-color: var(--err); }
+  .callout.ok   { border-color: var(--ok); }
+  code, pre {
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-size: 13px;
+  }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; color: #fbbf24; }
+  pre.mermaid {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    text-align: center;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--accent); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:hover td { background: rgba(56,189,248,0.04); }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .nav {
+    position: sticky; top: 0; background: var(--bg);
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+    margin: -32px -28px 24px; padding-left: 28px; padding-right: 28px;
+    font-size: 13px; z-index: 10;
+  }
+  .nav a { color: var(--ink-mute); text-decoration: none; margin-right: 18px; }
+  .nav a:hover { color: var(--accent); }
+  .small { font-size: 12px; color: var(--ink-mute); }
+  .actor-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; padding: 12px 14px;
+  }
+  .actor-card h4 { margin: 0 0 6px; color: var(--accent); font-size: 14px; }
+  .actor-card .where { color: var(--warn); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .actor-card .desc { color: var(--ink-mute); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="nav">
+  <a href="#actors">Actors</a>
+  <a href="#path-a">A: Direct CLI</a>
+  <a href="#path-b">B: AIDevOps UI</a>
+  <a href="#path-c">C: Programmatic</a>
+  <a href="#compare">Compare</a>
+  <a href="#cleanup">Cleanup</a>
+  <a href="#failure">Failure</a>
+  <a href="#state">State machine</a>
+</div>
+
+<h1>LCM-Sandbox — End-to-End Flows</h1>
+<p class="sub">Three trigger paths (direct CLI / AIDevOps UI / AIDevOps programmatic), their cleanup flows, failure paths, and the sandbox state machine. Mermaid sequence diagrams + flowcharts. Companion to <code>SANDBOX-ORCHESTRATION.md</code> and <code>SANDBOX-DETAILED-FLOW.md</code>.</p>
+
+<h2 id="actors">Actors and where they live</h2>
+
+<p>Every flow below references this cast. Note <em>where</em> each component physically lives — that's the distinction that makes the channel-security argument concrete.</p>
+
+<div class="grid-3">
+  <div class="actor-card">
+    <div class="where">📍 Developer's workstation</div>
+    <h4>Developer (human)</h4>
+    <div class="desc">The person initiating work. Sometimes acts via terminal, sometimes via browser.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Developer's workstation</div>
+    <h4>Terminal (zsh/bash)</h4>
+    <div class="desc">Shell where the developer types <code>lcm-sandbox create</code> in path A.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Developer's workstation</div>
+    <h4>Browser</h4>
+    <div class="desc">Where the developer clicks UI buttons for path B.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Server (or workstation if dev)</div>
+    <h4>AIDevOps frontend</h4>
+    <div class="desc">React/Vue web UI in <code>aidevops/client/</code>.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Server (or workstation if dev)</div>
+    <h4>AIDevOps backend</h4>
+    <div class="desc">API server + workflow engine in <code>aidevops/server/</code>. Hosts the MCP server.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Server (or workstation if dev)</div>
+    <h4>AIDevOps DB</h4>
+    <div class="desc"><code>agent_artifacts</code>, <code>audit_events</code>, plans, runs.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Host machine</div>
+    <h4>lcm-sandbox CLI</h4>
+    <div class="desc">Python package, the orchestrator we built in Phase 1.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Host machine</div>
+    <h4>Docker daemon (via Colima)</h4>
+    <div class="desc">Container runtime. Creates and destroys sandbox containers.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Inside container</div>
+    <h4>Sandbox container</h4>
+    <div class="desc">Ubuntu + agent CLI + worktree. <strong>Dials out only.</strong></div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Network</div>
+    <h4>Anthropic API</h4>
+    <div class="desc">Where Claude makes model calls. Egress-allowlisted from the container.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Network</div>
+    <h4>Git remote (origin)</h4>
+    <div class="desc">GitHub/GitLab. Pushes blocked by pre-push hook in the container.</div>
+  </div>
+  <div class="actor-card">
+    <div class="where">📍 Network</div>
+    <h4>S3 / artifact store</h4>
+    <div class="desc">Where intermediate and final artifacts get archived.</div>
+  </div>
+</div>
+
+<h2 id="path-a">Path A — Direct CLI (developer in terminal)</h2>
+
+<div class="callout">
+<strong>Who initiates:</strong> A developer, at <em>their own workstation</em>, opening a terminal and typing <code>lcm-sandbox create ...</code>. No web UI, no AIDevOps involvement, no MCP back-channel.<br><br>
+<strong>When to use:</strong> Local development of consumer projects, manual ad-hoc sandbox runs, debugging the tool itself, smoke-testing before integration.
+</div>
+
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Dev as Developer
+    participant Term as Terminal (zsh)
+    participant CLI as lcm-sandbox CLI
+    participant Docker as Docker daemon
+    participant Cont as Sandbox container
+    participant Anthropic as Anthropic API
+    participant Git as Git (local repo)
+
+    Dev->>Term: Type: lcm-sandbox create --repo X --branch Y --allowed-paths Z
+    Term->>CLI: spawn Python process
+    Note over CLI: Phase 0: Preflight (8 checks)
+    CLI->>Git: rev-parse, show-ref, ls-remote
+    CLI->>Docker: docker ps, image inspect
+    Note over CLI: Phase 1: Worktree
+    CLI->>Git: git worktree add &lt;path&gt; &lt;branch&gt;
+    Note over CLI: Phase 2: Sync
+    CLI->>Git: fetch origin, merge-base, rebase if behind
+    Note over CLI: Phase 3: Docker image check
+    CLI->>Docker: image inspect lcm-dev-agent:latest
+    Note over CLI: Phase 4: Container launch
+    CLI->>Docker: docker run (with --cap-drop=ALL, --read-only, etc.)
+    Docker->>Cont: start container
+    Note over Cont: STEP 4.5 entrypoint:<br/>lockdown ACLs, install pre-push hook,<br/>write manifest, render agent profile,<br/>install rm-shim, smoke test
+    Cont->>Cont: agent runs (claude in bypassPermissions)
+    Cont->>Anthropic: model calls (HTTPS, dev's ANTHROPIC_API_KEY)
+    Anthropic-->>Cont: completions
+    Cont->>Git: local commits inside worktree (push blocked)
+    Note over Cont: --command finishes OR timeout
+    Docker-->>CLI: container exits
+    Note over CLI: Phase 6: Artifact capture
+    CLI->>Git: git log, git diff, status
+    CLI-->>Term: stdout: JSON result
+    Term-->>Dev: review JSON
+    Note over Dev: Developer reads logs, decides next step,<br/>manually runs lcm-sandbox cleanup later
+</pre>
+
+<p><strong>Auth:</strong> Developer's local <code>ANTHROPIC_API_KEY</code> env var. <strong>Observability:</strong> stdout JSON + structured logs to stderr. <strong>Cleanup:</strong> manual <code>lcm-sandbox cleanup --sandbox-id ...</code>. <strong>No mid-run channel.</strong></p>
+
+<h2 id="path-b">Path B — AIDevOps UI (developer clicks "Run plan")</h2>
+
+<div class="callout">
+<strong>Who initiates:</strong> A developer, in <em>their browser</em>, on the AIDevOps web UI, after reviewing an approved plan, clicks a "Run plan in sandbox" button.<br><br>
+<strong>What's different from Path A:</strong> AIDevOps backend invokes the CLI as a subprocess, mints a per-run MCP token, exposes a live channel back to the workflow engine, and stores artifacts in the AIDevOps DB instead of just printing JSON.
+</div>
+
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Dev as Developer
+    participant Browser
+    participant FE as AIDevOps frontend
+    participant BE as AIDevOps backend
+    participant MCP as AIDevOps MCP server
+    participant Token as Token issuer
+    participant DB as AIDevOps DB
+    participant CLI as lcm-sandbox CLI
+    participant Docker as Docker
+    participant Cont as Sandbox container
+    participant Anthropic
+
+    Dev->>Browser: Open AIDevOps, navigate to plan
+    Browser->>FE: GET /plans/&lt;id&gt;
+    FE->>BE: fetch plan details
+    BE->>DB: SELECT plan WHERE id=...
+    DB-->>BE: plan + allowed_paths
+    BE-->>FE: plan JSON
+    FE-->>Browser: render plan UI
+
+    Dev->>Browser: Click "Run plan in sandbox"
+    Browser->>FE: POST /plans/&lt;id&gt;/run
+    FE->>BE: enqueue sandbox-run job
+    BE->>Token: mint OAuth token (aud=run-id, ttl=2h, scopes=run-tools)
+    Token-->>BE: bearer token
+    BE->>BE: write token to /tmp/run-&lt;id&gt;.token (tmpfs)
+    BE->>CLI: spawn(lcm-sandbox create --repo ... --mcp-endpoint https://aidevops/mcp --mcp-token-file /tmp/run-&lt;id&gt;.token)
+    Note over CLI: Phases 0-3 (preflight, worktree, sync, image check)
+    CLI->>Docker: docker run (--read-only, --cap-drop=ALL, secret mount, env vars)
+    Docker->>Cont: start container
+    Cont->>Cont: entrypoint applies agent profile, writes .mcp.json with ${MCP_*} substitution
+
+    rect rgba(56,189,248,0.08)
+    Note over Cont,MCP: Live MCP channel — sandbox dials out
+    Cont->>MCP: POST /tools/list (Bearer token)
+    MCP->>Token: validate aud + exp + scope
+    Token-->>MCP: ok
+    MCP-->>Cont: tool list (report_progress, request_approval, ...)
+    end
+
+    Cont->>Anthropic: model calls (separate Anthropic key)
+    Cont->>MCP: report_progress(phase="implement", percent=25)
+    MCP->>DB: insert progress event
+    MCP->>FE: WebSocket push: progress update
+    FE-->>Browser: UI shows live progress
+
+    Cont->>MCP: request_human_approval(action="delete legacy module", blast_radius="medium")
+    MCP->>DB: insert pending approval
+    MCP->>FE: WebSocket push: approval needed
+    FE-->>Browser: notification + approve/deny buttons
+    Dev->>Browser: Click "approve"
+    Browser->>FE: POST /approvals/&lt;id&gt;/decide
+    FE->>BE: forward decision
+    BE->>MCP: resolve pending approval
+    MCP-->>Cont: approval response (allow)
+    Cont->>Cont: agent proceeds
+
+    Note over Cont: agent completes
+    Cont->>MCP: notify_completion(status="success", summary=...)
+    Docker-->>CLI: container exits
+    CLI->>CLI: Phase 6 artifact capture
+    CLI->>BE: write artifacts (S3 path + git diff)
+    BE->>DB: insert agent_artifacts + audit_events
+    BE->>Token: revoke run token
+    CLI-->>BE: JSON result
+    BE-->>FE: run-complete event
+    FE-->>Browser: UI shows final result + diff viewer
+</pre>
+
+<p><strong>Auth:</strong> Per-run Anthropic key minted by AIDevOps + per-run bearer for the MCP channel. <strong>Observability:</strong> live progress + approval pings via WebSocket. <strong>Cleanup:</strong> still requires either manual click or PR-merge webhook.</p>
+
+<h2 id="path-c">Path C — AIDevOps programmatic (no human button-click)</h2>
+
+<div class="callout">
+<strong>Who initiates:</strong> Nobody, in real time. A <em>workflow trigger</em> fires: a GitHub webhook on PR open, a cron, an upstream event, a scheduled audit, etc.<br><br>
+<strong>What's different from Path B:</strong> No frontend involvement initially. Human-in-the-loop only happens if the workflow needs an approval (gated by risk classification). Otherwise the entire run is autonomous.
+</div>
+
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Trigger as Trigger source<br/>(webhook / cron / event)
+    participant BE as AIDevOps backend
+    participant Plan as Plan engine
+    participant Risk as Risk classifier
+    participant FE as AIDevOps frontend
+    actor Dev as On-call human
+    participant MCP as AIDevOps MCP server
+    participant CLI as lcm-sandbox CLI
+    participant Cont as Sandbox container
+    participant DB as AIDevOps DB
+
+    Trigger->>BE: POST /webhook (or scheduled fire)
+    BE->>Plan: build plan from trigger payload
+    Plan->>DB: insert plan record
+    Plan->>Risk: classify(plan) -> low|medium|high|critical
+    Risk-->>Plan: risk = medium
+
+    alt risk == low
+        Plan->>BE: auto-run
+    else risk in {medium, high, critical}
+        Plan->>FE: emit approval-needed event
+        FE-->>Dev: notification (browser, slack, email)
+        Dev->>FE: click approve
+        FE->>BE: forward decision
+        BE->>Plan: approval granted
+    end
+
+    BE->>CLI: spawn(lcm-sandbox create ... --mcp-endpoint ... --mcp-token-file ...)
+    Note over CLI,Cont: (Same Phases 0-4 as Path B)
+    Cont->>MCP: tools/list (Bearer)
+    MCP-->>Cont: tool surface
+
+    rect rgba(34,197,94,0.06)
+    Note over Cont,MCP: Autonomous execution — no human watching real-time
+    Cont->>MCP: report_progress (heartbeat every N seconds)
+    Cont->>MCP: submit_intermediate_artifact (logs, diffs)
+    MCP->>DB: persist
+    end
+
+    alt agent hits a destructive op flagged in plan
+        Cont->>MCP: request_human_approval
+        MCP->>FE: push approval needed
+        FE-->>Dev: page on-call
+        Dev->>FE: approve / deny
+        FE-->>MCP: decision
+        MCP-->>Cont: response
+    end
+
+    Cont->>MCP: notify_completion
+    CLI->>BE: final artifacts
+    BE->>DB: agent_artifacts + audit_events
+    Note over BE: workflow continues:<br/>- open PR on origin<br/>- run consumer tests<br/>- request code review
+</pre>
+
+<p><strong>Auth:</strong> Same as Path B. <strong>Observability:</strong> async — humans see progress later via dashboards, paged only on approval requests or failure. <strong>Cleanup:</strong> PR-merge webhook fires the cleanup flow.</p>
+
+<h2 id="compare">Side-by-side comparison</h2>
+
+<table>
+<thead><tr><th>Concern</th><th>A: Direct CLI</th><th>B: AIDevOps UI</th><th>C: Programmatic</th></tr></thead>
+<tbody>
+<tr><td>Who pushes the button</td><td>Developer in terminal</td><td>Developer in browser</td><td>Webhook / cron / event</td></tr>
+<tr><td>Where the developer is</td><td>Their workstation, shell</td><td>Their workstation, browser</td><td>Anywhere — possibly absent</td></tr>
+<tr><td>AIDevOps involved?</td><td>No</td><td>Yes (frontend + backend)</td><td>Yes (backend only initially)</td></tr>
+<tr><td>Risk classification</td><td>None</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Approval gate</td><td>None</td><td>Pre-run (click)</td><td>Pre-run (page on-call if needed)</td></tr>
+<tr><td>Mid-run MCP channel</td><td>None (or local sink)</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Live UI</td><td>Stdout JSON</td><td>WebSocket progress + diffs</td><td>Dashboard view, async</td></tr>
+<tr><td>Mid-run approval</td><td>N/A</td><td>UI prompt</td><td>Page on-call human</td></tr>
+<tr><td>Anthropic auth</td><td>Developer's API key</td><td>Per-run minted key</td><td>Per-run minted key</td></tr>
+<tr><td>Artifact destination</td><td>Local JSON</td><td>S3 + AIDevOps DB</td><td>S3 + AIDevOps DB</td></tr>
+<tr><td>Cleanup trigger</td><td>Manual <code>cleanup</code></td><td>Manual or webhook</td><td>PR-merge webhook</td></tr>
+<tr><td>Concurrency</td><td>1 per developer</td><td>1 per developer per UI tab</td><td>N parallel (fanned out)</td></tr>
+</tbody>
+</table>
+
+<h2 id="cleanup">Cleanup flows</h2>
+
+<h3>Manual cleanup (path A and optionally B)</h3>
+
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Dev as Developer
+    participant Term as Terminal
+    participant CLI as lcm-sandbox CLI
+    participant Git as Git
+    participant FS as Host filesystem
+    participant Archive as Archive (S3 / local)
+
+    Dev->>Term: lcm-sandbox cleanup --sandbox-id sandbox-...
+    Term->>CLI: spawn
+    CLI->>Git: verify merge to main succeeded
+    CLI->>Archive: upload final artifacts
+    CLI->>Git: git worktree remove &lt;path&gt;
+    CLI->>FS: confirm &lt;path&gt; deleted
+    CLI-->>Term: JSON: cleaned_up_successfully
+    Term-->>Dev: confirmation
+</pre>
+
+<h3>PR-merge webhook cleanup (path C and B)</h3>
+
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Github as GitHub
+    participant BE as AIDevOps backend
+    participant DB as AIDevOps DB
+    participant CLI as lcm-sandbox CLI
+    participant Git
+    participant Archive
+
+    Github->>BE: webhook: pull_request.closed, merged=true
+    BE->>DB: SELECT run_id WHERE pr_number=...
+    DB-->>BE: run_id + worktree_path + sandbox_id
+    BE->>CLI: spawn(lcm-sandbox cleanup --sandbox-id ...)
+    CLI->>Git: verify merge succeeded
+    CLI->>Archive: archive final artifacts to S3
+    CLI->>Git: git worktree remove
+    CLI-->>BE: cleanup result
+    BE->>DB: UPDATE status='completed_merged', worktree_path=NULL
+    BE->>DB: INSERT audit_event 'sandbox_cleanup'
+</pre>
+
+<h2 id="failure">Failure paths</h2>
+
+<p>What happens when a phase fails. Different paths have different escape routes.</p>
+
+<pre class="mermaid">
+flowchart TD
+    Start([Phase fails])
+    Start --> Q1{Which phase?}
+
+    Q1 -->|Phase 0 preflight| P0[Exit 1, JSON error<br/>nothing created yet]
+    Q1 -->|Phase 1 worktree| P1[Exit 2<br/>Cleanup partial worktree<br/>if any]
+    Q1 -->|Phase 2 sync| P2[Exit 3<br/>Worktree exists but is dirty<br/>Leave for manual review]
+    Q1 -->|Phase 3 docker image| P3[Exit 4<br/>Worktree intact<br/>Image issue only]
+    Q1 -->|Phase 4 launch| P4[Exit 5<br/>Container may be partial<br/>docker rm to clean]
+    Q1 -->|Phase 5 agent exec| P5[Exit code from container<br/>Phase 6 still captures artifacts]
+    Q1 -->|Phase 6 capture| P6[Exit 6<br/>Logs preserved in /tmp/<br/>Manual triage]
+
+    P0 --> R{Trigger path?}
+    P1 --> R
+    P2 --> R
+    P3 --> R
+    P4 --> R
+    P5 --> R
+    P6 --> R
+
+    R -->|A: CLI| Direct[Developer reads stderr<br/>Decides next step]
+    R -->|B: UI| Toast[Frontend shows toast +<br/>links to logs in DB]
+    R -->|C: programmatic| Page[Page on-call human<br/>via PagerDuty / Slack]
+
+    Direct --> Triage([Manual triage])
+    Toast --> Triage
+    Page --> Triage
+</pre>
+
+<div class="callout warn">
+<strong>Key invariant:</strong> any failure after Phase 4 (container launched) still runs Phase 6 (artifact capture) to preserve whatever the agent did before the failure. This makes post-mortem possible even on partial runs.
+</div>
+
+<h2 id="state">Sandbox lifecycle state machine</h2>
+
+<p>Every sandbox run progresses through these states. State changes are persisted to <code>agent_artifacts.status</code> in AIDevOps DB for paths B and C; printed to stdout for path A.</p>
+
+<pre class="mermaid">
+stateDiagram-v2
+    [*] --> Requested
+    Requested --> Preflight: validated by AIDevOps risk gate (B, C) / immediate (A)
+    Preflight --> WorktreePrep: phases 0 ok
+    Preflight --> Errored: preflight fail
+    WorktreePrep --> Sync: worktree created/reset
+    WorktreePrep --> Errored: worktree fail
+    Sync --> DockerPrep: in_sync / behind→rebased
+    Sync --> Errored: ahead / diverged / rebase conflict
+    DockerPrep --> Ready: image present + verified
+    DockerPrep --> Errored: image missing / broken
+    Ready --> Running: docker run + entrypoint
+    Ready --> Errored: container failed to start
+    Running --> AwaitingApproval: agent calls request_human_approval (B, C)
+    AwaitingApproval --> Running: approved
+    AwaitingApproval --> Errored: denied or approval timeout
+    Running --> Capturing: container exits (success or timeout)
+    Capturing --> Captured: artifacts persisted
+    Capturing --> Errored: capture failed
+    Captured --> AwaitingMerge: PR opened
+    AwaitingMerge --> CleanedUp: PR merged -> webhook (B, C) / manual cleanup (A)
+    AwaitingMerge --> AwaitingMerge: PR pending
+    CleanedUp --> [*]
+    Errored --> [*]: triage
+</pre>
+
+<h2>What this doc does NOT cover (yet)</h2>
+
+<ul>
+  <li><strong>Multi-step plans</strong> — where one run feeds the next via worktree reuse. Implementation supports it (<code>--existing-worktree</code> flag); flow diagram TBD.</li>
+  <li><strong>Concurrent runs against the same repo</strong> — multiple worktrees in <code>.sandbox-worktrees/</code>. Documented in architecture; flow diagram TBD.</li>
+  <li><strong>Anthropic API failure handling</strong> — what happens if the model API is down mid-run. Out of scope for sandbox; agent layer concern.</li>
+  <li><strong>The macos-app launcher</strong> — auto-launches the AIDevOps server. Not a user-facing entry point; documented in <code>aidevops/macos-app/README.md</code>.</li>
+</ul>
+
+<hr style="border:none;border-top:1px solid var(--border);margin:42px 0 20px">
+<p class="small">Companion to <code>SANDBOX-ORCHESTRATION.md/.html</code> (channel security model) and <code>SANDBOX-DETAILED-FLOW.md</code> (per-phase bash). Open this HTML in any browser — diagrams render via Mermaid v11 from jsDelivr CDN.</p>
+
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      primaryColor: '#1e293b',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#475569',
+      lineColor: '#94a3b8',
+      secondaryColor: '#334155',
+      tertiaryColor: '#0b1220',
+      noteBkgColor: '#1e293b',
+      noteTextColor: '#fbbf24',
+      noteBorderColor: '#f59e0b',
+      actorBkg: '#1e293b',
+      actorBorder: '#38bdf8',
+      actorTextColor: '#e2e8f0'
+    },
+    sequence: {
+      useMaxWidth: true,
+      mirrorActors: false,
+      bottomMarginAdj: 10
+    },
+    flowchart: { useMaxWidth: true, htmlLabels: true },
+    state: { useMaxWidth: true }
+  });
+</script>
+
+</body>
+</html>
