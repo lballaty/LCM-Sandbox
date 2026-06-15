@@ -1,31 +1,38 @@
 # Session Handoff — Phase 1 Implementation
 
-**Date:** 2026-06-15 (last reconciled against working tree)
-**Branch:** main
+**Date:** 2026-06-15 (post-commit reconciliation)
+**Branch:** main (pushed to origin)
 **Working directory:** `/Users/liborballaty/LocalProjects/GitHubProjectsDocuments/LCM-Sandbox`
 
 ---
 
 ## Status summary
 
-**Phase 1 complete and committed.** Phase 2 image + Phase 4 launcher implemented but **uncommitted** in the working tree; a new HERMES persona renderer/capturer subsystem (WP-8) has been added on top of the original plan and is also uncommitted. Test suite: **50 passing, 7 failing, 1 skipped** — all 7 failures are in `test_persona_render_capture.py`, caused by the local Privoxy proxy intercepting `127.0.0.1` HTTP calls (not a code defect); the skip is the docker-launcher integration test waiting on a locally-built `lcm-hermes-agent:latest` image. Phase 2 + 5 design docs remain authoritative. The pre-Phase-2 verification gates (GH `claude-code` issues #28293 and #36665) have **not** yet been confirmed.
+**Phases 1–4 and WP-8 are now committed.** All previously-uncommitted working-tree work was committed in 5 logical commits on 2026-06-15 and pushed to `origin/main`. A new manual dev-sandbox template (Dockerfile + launcher + runbook + global `/dev-sandbox` skill) was also added in the same session. Test suite: **50 passing, 7 failing, 1 skipped** — the 7 failures are still in `test_persona_render_capture.py` (local Privoxy proxy intercepts `127.0.0.1`); the skip is the docker-launcher integration test waiting on a locally-built image. Phase 2 + 5 design docs remain authoritative. Pre-Phase-2 verification gates (GH `claude-code` issues #28293 and #36665) have **not** yet been confirmed. Phase 3 (artifact capture) is still untouched.
 
-### Uncommitted work in tree (as of 2026-06-15)
+### Commits landed this session
 
 ```
-M  lcm_sandbox/cli.py                                 # +launch/stop/status commands, DockerLaunchError exit-code 5
-M  pyproject.toml                                     # +responses dev dep, +persona-state-renderer/capturer scripts
-?? lcm_sandbox/core/docker_launcher.py                # Phase 4 launcher (288 lines)
-?? lcm_sandbox/tests/test_docker_launcher.py          # launcher unit tests (1 integration test skipped)
-?? lcm_sandbox/persona/                               # WP-8 persona renderer + capturer (renderer.py, capturer.py, cli.py, __init__.py)
-?? lcm_sandbox/tests/test_persona_render_capture.py   # persona tests (7 currently failing — Privoxy proxy interception)
-?? scripts/Dockerfile.hermes                          # Phase 2 image (95 lines)
-?? scripts/entrypoint.sh                              # Phase 2 entrypoint (223 lines)
-?? scripts/build-hermes-image.sh                      # image build helper
-?? uv.lock                                            # uv-managed lockfile (tooling switch from pip-only)
+51c77e2 feat(dev-sandbox): manual sandbox template (image + launcher + runbook)
+c0b0bb7 feat(wp8): hermes persona renderer + capturer subsystem
+51697aa feat(phase4): docker launcher + launch/stop/status CLI commands
+829ff5a feat(phase2): hermes-variant image (Dockerfile + entrypoint + build helper)
+1e1f4c4 docs(trackers): reconcile to Phase 2 + Phase 4 + WP-8 working-tree reality
 ```
 
-**First action next session:** decide whether to commit the Phase 2+4+persona WIP as-is, split it across logical commits (Phase 2 image / Phase 4 launcher / WP-8 persona), or revise before commit. None of this work is reflected in git history yet.
+### Manual dev-sandbox template (new, separate from agentic flow)
+
+A hand-driven sandbox flow was added alongside the agentic `lcm-sandbox` CLI. It is distinct in purpose:
+
+- **Image:** `lcm-dev-sandbox:latest` — ubuntu:24.04 + Node 20 + Python + uv + Claude Code + Codex CLI + Gemini CLI; bakes a `/Users/<HOST_USER>` → `/home/aiagent` symlink so absolute host paths in mounted dotfiles resolve.
+- **Launcher:** `scripts/run-dev-sandbox.sh` — mounts `.claude`/`.codex`/`.gemini` rw (so `/login` and CLI state persist), `.ai-dev-dotfiles`/`.gitconfig` ro. `REPO_PATH`, `CONTAINER_NAME`, `EXTRA_MOUNTS` are env-overridable.
+- **Runbook:** `scripts/README-dev-sandbox.md` — full end-to-end procedure with mount table, autonomous-Claude recipe, and common gotchas.
+- **Trigger:** global Claude Code skill at `~/.claude/skills/dev-sandbox/SKILL.md` (lives in the user's dotfiles repo at `~/.ai-dev-dotfiles/.claude/skills/`; uncommitted there as of session end).
+- **Colima profile:** dedicated `lcm-sandbox` profile (4 CPU / 8 GiB / 60 GiB, aarch64, docker runtime).
+
+**Operational caveat:** the image on disk was built once with Claude + Codex only and without the symlink. To get the committed template (Gemini + symlink) in the running container, rebuild and recreate.
+
+**First action next session:** verify Phase 4 hardening flags, fix the WP-8 persona-test Privoxy issue, and decide on Phase 3 entry point. The dev-sandbox skill backup in `~/.ai-dev-dotfiles` should also be committed there.
 
 ---
 

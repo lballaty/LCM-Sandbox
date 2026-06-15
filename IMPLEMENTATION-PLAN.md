@@ -664,19 +664,20 @@ brew install lcm-sandbox
 
 ---
 
-## Implementation Status (Updated 2026-06-15)
+## Implementation Status (Updated 2026-06-15, post-commit)
 
 | Phase | Scope | Status |
 | :---- | :---- | :----- |
 | 1 | Core CLI + Phases 0–3 (preflight, worktree, sync, docker image check) | ✅ **Complete & committed** (`39e6517`) — 43 Phase-1 unit tests passing |
-| 2 | Docker image + STEP 4.5 entrypoint | 🟡 **Partially implemented, uncommitted** — `scripts/Dockerfile.hermes`, `scripts/entrypoint.sh`, `scripts/build-hermes-image.sh` in tree. Still missing: `docker-git-hooks.sh`, `rm-shim.sh`, `smoke-test.sh`, `apply_agent_profile.py`, agent-profile templates. |
+| 2 | Docker image + STEP 4.5 entrypoint | 🟡 **Partially implemented & committed** (`829ff5a`) — `scripts/Dockerfile.hermes`, `scripts/entrypoint.sh`, `scripts/build-hermes-image.sh` landed. Still missing: `docker-git-hooks.sh`, `rm-shim.sh`, `smoke-test.sh`, `apply_agent_profile.py`, agent-profile templates. |
 | 3 | Artifact capture + cleanup command | ⬜ Not started |
-| 4 | Container launch (`docker_launcher.py`) + `launch`/`stop`/`status` CLI commands | 🟡 **Implemented, uncommitted** — `lcm_sandbox/core/docker_launcher.py` (288 lines) + `lcm_sandbox/cli.py` extensions. Integration test skipped until `lcm-hermes-agent:latest` image is built. Hardening flags (`--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only`) and `--egress-allowlist` flag still to verify. |
+| 4 | Container launch (`docker_launcher.py`) + `launch`/`stop`/`status` CLI commands | 🟡 **Implemented & committed** (`51697aa`) — launcher + CLI extensions in main. Integration test skipped until `lcm-hermes-agent:latest` image is built. Hardening flags (`--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only`) and `--egress-allowlist` flag still to verify. |
 | 5 | AIDevOps integration + live MCP back-channel | ⬜ **Designed** — see `SANDBOX-ORCHESTRATION.md`, `SANDBOX-FLOWS.html`. Implementation blocked on verifying GH `claude-code` issues #28293 + #36665. |
-| WP-8 | HERMES persona renderer + capturer (added scope) | 🟡 **Implemented, uncommitted, undocumented in this plan** — `lcm_sandbox/persona/{renderer,capturer,cli}.py`; new console scripts `persona-state-renderer`, `persona-state-capturer`; 7/7 tests currently red under local Privoxy proxy interception. Source-of-truth design lives in an external `HERMES-PERSONA-INTEGRATION-PLAN` doc that is not in this repo. |
+| WP-8 | HERMES persona renderer + capturer (added scope) | 🟡 **Implemented & committed** (`c0b0bb7`) — `lcm_sandbox/persona/{renderer,capturer,cli}.py`; new console scripts `persona-state-renderer`, `persona-state-capturer`. 7/7 tests currently red under local Privoxy proxy interception. Source-of-truth design lives in an external `HERMES-PERSONA-INTEGRATION-PLAN` doc that is not in this repo. |
+| Manual dev-sandbox template | Hand-driven sandbox (image + launcher + runbook + `/dev-sandbox` skill) | ✅ **Complete & committed** (`51c77e2`) — separate from agentic flow. Used to provide a human-driven Dockerized shell with Claude Code + Codex CLI + Gemini CLI on any host repo. See `scripts/README-dev-sandbox.md`. |
 | Docs/packaging (was Phase 4 in original plan) | `USAGE.md`, `TROUBLESHOOTING.md`, `CHANGELOG.md`, pip packaging, E2E suite | ⬜ Not started. `uv.lock` is now present — document the `uv` workflow when these land. |
 
-**Resume point:** decide on commit strategy for the Phase 2 + Phase 4 + WP-8 working-tree changes, then close the remaining Phase 2 follow-ups (git hooks, rm-shim, smoke-test, agent-profile templates, hardening flags) and fix the WP-8 proxy test failure. Phase 3 (artifact capture) is still the next greenfield phase after that.
+**Resume point:** close the remaining Phase 2 follow-ups (git hooks, rm-shim, smoke-test, agent-profile templates) and the Phase 4 hardening flags, fix the WP-8 persona-test Privoxy issue, then start Phase 3 (artifact capture).
 
 ### Pre-Phase-2 verification gates
 
