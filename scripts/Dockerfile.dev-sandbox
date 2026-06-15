@@ -1,0 +1,72 @@
+# File: LCM-Sandbox/scripts/Dockerfile.dev-sandbox
+# Description: Manual dev-sandbox image with Claude Code + Codex CLI preinstalled.
+#              Distinct from Dockerfile.hermes (Hermes Agent variant) and from the
+#              eventual lcm-dev-agent image. Intended as a template for hand-driven
+#              sandboxes: bind-mount a host repo at /workspace, bind-mount host
+#              dotfiles read-only into /home/aiagent.
+# Author: Libor Ballaty <libor@arionetworks.com>
+# Created: 2026-06-15
+# Tag: lcm-dev-sandbox:latest
+
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG UID=1000
+ARG GID=1000
+ARG NODE_MAJOR=20
+# HOST_USER is the macOS short username on the host. The image creates a symlink
+# /Users/<HOST_USER> -> /home/aiagent so absolute host paths embedded in mounted
+# dotfiles (e.g. ~/.claude/settings.json hook scripts referencing
+# /Users/<HOST_USER>/.claude/hooks/...) resolve correctly inside the container.
+ARG HOST_USER=liborballaty
+
+# Base system + dev toolchain.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl wget gnupg git git-lfs ssh-client \
+        jq yq \
+        build-essential pkg-config cmake \
+        libssl-dev libffi-dev zlib1g-dev libsqlite3-dev \
+        python3 python3-venv python3-pip python3-dev \
+        xz-utils iproute2 procps ripgrep \
+        vim less tree htop \
+        tzdata locales sudo \
+    && locale-gen en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 TZ=UTC
+
+# NodeSource Node.js (required by Claude Code + Codex CLI).
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/* && \
+    node --version && npm --version
+
+# Agent CLIs, installed globally so they're on PATH for any user.
+RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli \
+    && claude --version || true \
+    && codex --version || true \
+    && gemini --version || true
+
+# aiagent user (UID 1000 matches Colima's default Lima VM user so bind-mount perms work).
+# Ubuntu 24.04 ships an 'ubuntu' user at UID 1000 — remove first.
+RUN (userdel -r ubuntu 2>/dev/null || true) && \
+    groupadd -g ${GID} agentgroup && \
+    useradd -m -u ${UID} -g agentgroup -s /bin/bash aiagent && \
+    echo 'aiagent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/aiagent && \
+    chmod 0440 /etc/sudoers.d/aiagent
+
+# Workspace mount point.
+RUN mkdir -p /workspace && chown aiagent:agentgroup /workspace
+
+# Symlink host home path so absolute /Users/<HOST_USER>/... references inside mounted
+# dotfiles (Claude hook scripts, etc.) resolve to the container's /home/aiagent.
+RUN mkdir -p /Users && ln -s /home/aiagent /Users/${HOST_USER}
+
+USER aiagent
+WORKDIR /home/aiagent
+
+# uv for python project work inside the sandbox.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/home/aiagent/.local/bin:${PATH}"
+
+CMD ["/bin/bash", "-l"]
