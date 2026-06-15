@@ -11,8 +11,15 @@ import click
 
 from lcm_sandbox import __version__
 from lcm_sandbox.commands.create import create_sandbox
+from lcm_sandbox.core.docker_launcher import (
+    DEFAULT_IMAGE_TAG,
+    container_status,
+    launch_container,
+    stop_container,
+)
 from lcm_sandbox.exceptions import (
     DockerImageError,
+    DockerLaunchError,
     PreflightCheckError,
     SandboxError,
     SyncError,
@@ -27,6 +34,7 @@ _EXIT_CODES = {
     WorktreeError: 2,
     SyncError: 3,
     DockerImageError: 4,
+    DockerLaunchError: 5,
 }
 
 
@@ -123,6 +131,102 @@ def create(
         _die(exc)
 
     click.echo(result.model_dump_json(indent=2))
+    sys.exit(0)
+
+
+@main.command("launch")
+@click.option("--sandbox-id", required=True,
+              help="Sandbox / run id. Used as the container name.")
+@click.option("--worktree-path", required=True,
+              type=click.Path(exists=True, file_okay=False),
+              help="Absolute host path to the prepared worktree (Phase 1 output).")
+@click.option("--plan-id", default=None,
+              help="Plan id. Defaults to sandbox-id when omitted.")
+@click.option("--branch", "branch_name", default="sandbox",
+              help="Branch label written into the manifest.")
+@click.option("--allowed-paths", "allowed_paths_json",
+              default='{"write":[],"read":["*"]}', show_default=True,
+              help='JSON object: {"write":["src/"],"read":["*"]}')
+@click.option("--timeout", "timeout_minutes", default=60, show_default=True, type=int)
+@click.option("--hermes-persona", default=None,
+              help="Persona key. If set, entrypoint renders state + starts hermes gateway.")
+@click.option("--image-tag", default=DEFAULT_IMAGE_TAG, show_default=True)
+@click.option("--mcp-url", default=None)
+@click.option("--mcp-token", default=None)
+@click.option("--model-provider", default=None)
+@click.option("--model-key", default=None)
+def launch(
+    sandbox_id: str,
+    worktree_path: str,
+    plan_id: str | None,
+    branch_name: str,
+    allowed_paths_json: str,
+    timeout_minutes: int,
+    hermes_persona: str | None,
+    image_tag: str,
+    mcp_url: str | None,
+    mcp_token: str | None,
+    model_provider: str | None,
+    model_key: str | None,
+) -> None:
+    """Launch a sandbox container (Phase 4)."""
+    try:
+        parsed_paths = json.loads(allowed_paths_json)
+    except json.JSONDecodeError as exc:
+        _die(DockerLaunchError(
+            "--allowed-paths is not valid JSON", step="4.1", error=str(exc),
+        ))
+
+    try:
+        config = SandboxConfig(
+            plan_id=plan_id or sandbox_id,
+            run_id=sandbox_id,
+            repo_path=Path(worktree_path).resolve(),
+            branch_name=branch_name,
+            allowed_paths=AllowedPaths(**parsed_paths),
+            timeout_minutes=timeout_minutes,
+        )
+    except Exception as exc:
+        _die(DockerLaunchError(f"invalid launch configuration: {exc}", step="4.1"))
+
+    try:
+        result = launch_container(
+            config,
+            image_tag=image_tag,
+            worktree_path=Path(worktree_path).resolve(),
+            hermes_persona=hermes_persona,
+            mcp_url=mcp_url,
+            mcp_token=mcp_token,
+            model_provider=model_provider,
+            model_key=model_key,
+        )
+    except SandboxError as exc:
+        _die(exc)
+
+    click.echo(result.model_dump_json(indent=2))
+    sys.exit(0 if result.status == "running" else 5)
+
+
+@main.command("stop")
+@click.option("--sandbox-id", required=True)
+@click.option("--keep/--remove", default=False,
+              help="Keep the stopped container for post-mortem (default: remove).")
+def stop(sandbox_id: str, keep: bool) -> None:
+    """Stop and (by default) remove a sandbox container.
+
+    WP-3 will run artifact capture before invoking this; for now it's a teardown stub.
+    """
+    payload = stop_container(sandbox_id, remove=not keep)
+    click.echo(json.dumps(payload, indent=2))
+    sys.exit(0 if payload.get("stopped") else 5)
+
+
+@main.command("status")
+@click.option("--sandbox-id", required=True)
+def status(sandbox_id: str) -> None:
+    """Print the current status of a sandbox container as JSON."""
+    payload = container_status(sandbox_id)
+    click.echo(json.dumps(payload, indent=2))
     sys.exit(0)
 
 
