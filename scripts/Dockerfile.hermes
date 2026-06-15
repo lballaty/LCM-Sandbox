@@ -1,0 +1,95 @@
+# File: LCM-Sandbox/scripts/Dockerfile.hermes
+# Description: LCM-Sandbox image variant with Hermes Agent baked in. Used by Hermes persona executions.
+#              Standalone variant; not based on lcm-dev-agent. See SIZE BUDGET note below.
+# Author: Libor Ballaty <libor@arionetworks.com>
+# Created: 2026-06-09
+#
+# Verified by: aidevops/design/verification/phase-0-hermes-container/REPORT.md (2026-06-09)
+# Tag: lcm-hermes-agent:latest
+#
+# SIZE BUDGET NOTE:
+#   The Hermes install adds ~3 GB to the image (Python venv with deps + Node 22 + 75 bundled skills).
+#   With base Ubuntu 24.04 + lcm-sandbox tooling, total image is ~3.94 GB — exceeds the 1.5 GB
+#   ceiling in SANDBOX-IMAGE-TOOLCHAIN.md. This is intentional for the Hermes variant; the standard
+#   lcm-dev-agent image is unaffected. Future work (out of scope for v1):
+#     - prune bundled Hermes skills via Hermes config flag (saves ~1-2 GB)
+#     - multi-stage build to drop build-time-only deps
+#     - or split into base lcm-dev-agent + lcm-hermes-overlay layered images
+
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG UID=1000
+ARG GID=1000
+
+# Base apt deps. xz-utils is required by Hermes installer (extracts Node tarball).
+# iproute2 + procps give ss / ps for in-container debugging.
+# ripgrep is preferred by Hermes' grep fallback path.
+# build-essential et al. per SANDBOX-IMAGE-TOOLCHAIN.md base toolchain.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git git-lfs ssh-client \
+        jq yq \
+        build-essential pkg-config cmake \
+        libssl-dev libffi-dev zlib1g-dev libsqlite3-dev \
+        python3 python3-venv python3-pip python3-dev \
+        xz-utils iproute2 procps ripgrep \
+        vim-tiny less tree \
+        tzdata locales \
+    && locale-gen en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 TZ=UTC
+
+# Create aiagent user. Ubuntu 24.04 ships with default 'ubuntu' user at UID 1000 — remove first.
+RUN (userdel -r ubuntu 2>/dev/null || true) && \
+    groupadd -g ${GID} agentgroup && \
+    useradd -m -u ${UID} -g agentgroup -s /bin/bash aiagent
+
+# /opt/lcm-sandbox: home for entrypoint, agent profiles, git hooks (populated by WP-2 entrypoint work)
+RUN mkdir -p /opt/lcm-sandbox/{agent_profiles,git-hooks} && \
+    chown -R root:root /opt/lcm-sandbox && \
+    chmod -R 755 /opt/lcm-sandbox
+
+# Workspace mount point (consumer repo's worktree bind-mounted here at run time)
+RUN mkdir -p /workspace && chown aiagent:agentgroup /workspace
+
+USER aiagent
+WORKDIR /home/aiagent
+
+# Install uv as aiagent. Hermes installer relies on uv being available.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/home/aiagent/.local/bin:${PATH}"
+
+# Install Hermes Agent via official installer.
+# Per Phase 0 Finding 3: Hermes installs ITS RUNTIME into ~/.hermes/{hermes-agent,node,bin}.
+# This is part of the image; persona render at run time MUST preserve these dirs.
+RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+
+# Add Hermes runtime to PATH (the install script puts the wrapper at ~/.local/bin/hermes)
+ENV PATH="/home/aiagent/.local/bin:/home/aiagent/.hermes/hermes-agent/venv/bin:${PATH}"
+
+# HERMES_HOME points to aiagent's standard location; renderer (WP-8) copies persona-owned
+# files INTO this dir at sandbox start (via docker cp; NOT bind-mount).
+ENV HERMES_HOME=/home/aiagent/.hermes
+
+# Disable Hermes' own gateway-platforms and cron at the persona config level (config.yaml in
+# rendered HERMES_HOME). Per locked decisions L1 + Decision #40 + Decision #41:
+# AIDevOps owns workflow orchestration, scheduling, and notifications.
+
+# Sanity check.
+RUN hermes --version
+
+# Switch to root to install the WP-2 entrypoint, which must run as root inside
+# the container to chmod/chown the bind-mounted /workspace (STEP 4.5.2/4.5.3).
+# The entrypoint drops privileges to aiagent before launching Hermes.
+USER root
+COPY scripts/entrypoint.sh /opt/lcm-sandbox/entrypoint.sh
+RUN chmod 755 /opt/lcm-sandbox/entrypoint.sh && \
+    chown root:root /opt/lcm-sandbox/entrypoint.sh
+
+# ENTRYPOINT runs as root; the entrypoint drops to aiagent.
+ENTRYPOINT ["/opt/lcm-sandbox/entrypoint.sh"]
+
+# Default CMD: a no-op marker. The entrypoint ignores CMD when HERMES_PERSONA is
+# set; otherwise it falls through to interactive bash (with TTY) or sleep infinity.
+CMD []
