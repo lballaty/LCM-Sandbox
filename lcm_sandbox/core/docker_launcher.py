@@ -72,8 +72,13 @@ def _build_run_argv(
       - `-d` (detached): the host returns immediately; entrypoint runs Hermes
         in the background and `sleep infinity` holds the container until
         external teardown.
-      - `--cap-drop=ALL` for defence-in-depth. Network is the default bridge
-        for now; a restricted network policy is future work.
+      - `--cap-drop=ALL` and `--security-opt=no-new-privileges` for
+        defence-in-depth. Network is the default bridge for now; a restricted
+        network policy (egress allowlist) is future work.
+      - `--read-only` rootfs is deliberately NOT set yet: Hermes installer and
+        the entrypoint write under /home/aiagent and /tmp; enabling read-only
+        rootfs requires explicit `--tmpfs` for those mounts. Tracked as a
+        Phase 4 follow-up.
     """
     allowed_paths_json = json.dumps(
         sandbox_config.allowed_paths.model_dump(),
@@ -88,6 +93,10 @@ def _build_run_argv(
         "--label", f"run_id={sandbox_config.run_id}",
         "--label", f"sandbox_id={sandbox_config.run_id}",
         "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        # TODO(WP-future): --read-only rootfs + explicit --tmpfs /tmp and
+        # --tmpfs /home/aiagent/.cache once Hermes write-path audit confirms
+        # only those two locations need write access at runtime.
         # TODO(WP-future): swap to a restricted network policy (no egress except MCP).
         # For Phase 1 we use the default bridge.
         "-v", f"{worktree_path}:/workspace:rw",

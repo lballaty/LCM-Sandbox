@@ -71,6 +71,7 @@ def test_build_run_argv_contains_required_flags(cfg, worktree):
     assert "-d" in argv
     assert "--name" in argv and "run_xyz" in argv
     assert "--cap-drop=ALL" in argv
+    assert "--security-opt=no-new-privileges" in argv
     # Volume mount
     assert any(a.startswith(f"{worktree}:/workspace") for a in argv), argv
     # Env vars
