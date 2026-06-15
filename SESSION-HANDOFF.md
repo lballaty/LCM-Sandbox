@@ -1,6 +1,6 @@
 # Session Handoff — Phase 1 Implementation
 
-**Date:** 2026-06-02 (last updated)
+**Date:** 2026-06-15 (last reconciled against working tree)
 **Branch:** main
 **Working directory:** `/Users/liborballaty/LocalProjects/GitHubProjectsDocuments/LCM-Sandbox`
 
@@ -8,7 +8,24 @@
 
 ## Status summary
 
-**Phase 1 complete.** Full CLI working end-to-end (Phases 0→3), 43/43 unit tests passing, sanity-checked against a real temp git repo. Phase 2 + 5 design docs complete (agent config, image toolchain, orchestration channel, end-to-end flows). Permissions reverted to safe defaults. Ready for Phase 2 implementation (Dockerfile + entrypoint + `docker_launcher.py`).
+**Phase 1 complete and committed.** Phase 2 image + Phase 4 launcher implemented but **uncommitted** in the working tree; a new HERMES persona renderer/capturer subsystem (WP-8) has been added on top of the original plan and is also uncommitted. Test suite: **50 passing, 7 failing, 1 skipped** — all 7 failures are in `test_persona_render_capture.py`, caused by the local Privoxy proxy intercepting `127.0.0.1` HTTP calls (not a code defect); the skip is the docker-launcher integration test waiting on a locally-built `lcm-hermes-agent:latest` image. Phase 2 + 5 design docs remain authoritative. The pre-Phase-2 verification gates (GH `claude-code` issues #28293 and #36665) have **not** yet been confirmed.
+
+### Uncommitted work in tree (as of 2026-06-15)
+
+```
+M  lcm_sandbox/cli.py                                 # +launch/stop/status commands, DockerLaunchError exit-code 5
+M  pyproject.toml                                     # +responses dev dep, +persona-state-renderer/capturer scripts
+?? lcm_sandbox/core/docker_launcher.py                # Phase 4 launcher (288 lines)
+?? lcm_sandbox/tests/test_docker_launcher.py          # launcher unit tests (1 integration test skipped)
+?? lcm_sandbox/persona/                               # WP-8 persona renderer + capturer (renderer.py, capturer.py, cli.py, __init__.py)
+?? lcm_sandbox/tests/test_persona_render_capture.py   # persona tests (7 currently failing — Privoxy proxy interception)
+?? scripts/Dockerfile.hermes                          # Phase 2 image (95 lines)
+?? scripts/entrypoint.sh                              # Phase 2 entrypoint (223 lines)
+?? scripts/build-hermes-image.sh                      # image build helper
+?? uv.lock                                            # uv-managed lockfile (tooling switch from pip-only)
+```
+
+**First action next session:** decide whether to commit the Phase 2+4+persona WIP as-is, split it across logical commits (Phase 2 image / Phase 4 launcher / WP-8 persona), or revise before commit. None of this work is reflected in git history yet.
 
 ---
 
@@ -46,6 +63,17 @@
 - `lcm_sandbox/utils/docker.py` — **empty stub, not implemented**.
 
 ---
+
+## Reconciliation note (2026-06-15)
+
+The "What's pending" list below was written when Phase 1 was just closing. Since then the working tree advanced significantly without commits or tracker updates. The accurate picture is:
+
+- **Tasks 3–10 (utils/git, utils/docker, preflight, worktree, sync, docker_builder, CLI, create, unit tests, integration sanity)** — all delivered and committed in `39e6517` (Phase 1).
+- **Phase 2 image** — `scripts/Dockerfile.hermes`, `scripts/entrypoint.sh`, `scripts/build-hermes-image.sh` exist; **uncommitted**. Still missing per the original Phase 2 follow-up list: `docker-git-hooks.sh`, `rm-shim.sh`, `smoke-test.sh`, `apply_agent_profile.py`, `lcm_sandbox/templates/agent_profiles/{permissive,standard}.json`.
+- **Phase 4 launcher** — `lcm_sandbox/core/docker_launcher.py` implemented with `launch_container` / `stop_container` / `container_status`; CLI exposes `lcm-sandbox launch|stop|status`. **Uncommitted.** Hardening flags (`--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only`) not yet verified — re-check the launcher before commit. Phase 5 wiring flags (`--mcp-url`, `--mcp-token`, `--model-provider`, `--model-key`, `--hermes-persona`, `--image-tag`) are in place; no `--egress-allowlist` flag yet.
+- **HERMES persona (WP-8)** — `lcm_sandbox/persona/` adds a renderer + capturer for persona-owned files (config.yaml, SOUL.md, MEMORY.md, .env, skills/) materialized from an AIDevOps platform API. Two new console scripts: `persona-state-renderer`, `persona-state-capturer`. **This feature is not in `IMPLEMENTATION-PLAN.md`**; it originates in a `HERMES-PERSONA-INTEGRATION-PLAN` referenced only in the package docstring. Tests exist (`test_persona_render_capture.py`) but currently fail under local Privoxy interception.
+- **Tooling** — `uv.lock` indicates a switch (or addition) to `uv` for dependency management; not yet noted in README or plan.
+- **Phase 3 (artifact capture)** — still not started.
 
 ## What's pending (next session priorities)
 
@@ -164,14 +192,21 @@ All 10 Phase 1 tasks complete. All 4 follow-up tasks (#11 revert temp perms, #12
 - [ ] On a real consumer repo (e.g. `go-madeira`, `arionetworks-website`, `ballaty-rentals`), verify whether `.mcp.json` exists and what's in it; the entrypoint's sanitize step needs a real-world test case.
 
 ### Phase 2 (Dockerfile + entrypoint + launcher)
-- [ ] Write `docker/Dockerfile` per `SANDBOX-IMAGE-TOOLCHAIN.md`.
-- [ ] Write `scripts/docker-entrypoint.sh` implementing STEP 4.5 + the in-sandbox config application from `SANDBOX-AGENT-CONFIG.md`.
+- [x] Write `docker/Dockerfile` per `SANDBOX-IMAGE-TOOLCHAIN.md`. — delivered as `scripts/Dockerfile.hermes` (2026-06-15, uncommitted)
+- [x] Write `scripts/docker-entrypoint.sh` implementing STEP 4.5 + the in-sandbox config application from `SANDBOX-AGENT-CONFIG.md`. — delivered as `scripts/entrypoint.sh` (2026-06-15, uncommitted)
 - [ ] Write `scripts/docker-git-hooks.sh` (pre-push deny hook).
 - [ ] Write `scripts/rm-shim.sh`, `scripts/smoke-test.sh`, `scripts/apply_agent_profile.py`, and `lcm_sandbox/templates/agent_profiles/{permissive,standard}.json`.
-- [ ] Implement `lcm_sandbox/core/docker_launcher.py` (STEP 4.1-4.4 + monitoring).
-- [ ] Add `--cap-drop=ALL --security-opt=no-new-privileges --read-only` to the docker run flags.
-- [ ] Add `--mcp-endpoint`, `--mcp-token-file`, `--egress-allowlist` CLI flags (forward into the container as env/secret mounts).
+- [x] Implement `lcm_sandbox/core/docker_launcher.py` (STEP 4.1-4.4 + monitoring). — uncommitted; exposes `launch_container`, `stop_container`, `container_status`; integration test skips unless `lcm-hermes-agent:latest` is built locally
+- [ ] Add `--cap-drop=ALL --security-opt=no-new-privileges --read-only` to the docker run flags. — **verify against current launcher implementation before commit**
+- [~] Add `--mcp-endpoint`, `--mcp-token-file`, `--egress-allowlist` CLI flags. CLI now exposes `--mcp-url`, `--mcp-token`, `--model-provider`, `--model-key`, `--hermes-persona`, `--image-tag`; `--egress-allowlist` and a `--mcp-token-file` form (vs. `--mcp-token` literal) are still missing.
 - [ ] Integration tests: real container launch, file ACL enforcement, git push blocked.
+
+### WP-8 HERMES persona (added since the original plan)
+- [x] `lcm_sandbox/persona/renderer.py` + `capturer.py` + `cli.py` — uncommitted.
+- [x] Console scripts `persona-state-renderer`, `persona-state-capturer` wired in `pyproject.toml`.
+- [ ] Document the WP-8 feature in `IMPLEMENTATION-PLAN.md` and `README.md` (currently absent from both).
+- [ ] Locate or commit the `HERMES-PERSONA-INTEGRATION-PLAN` doc referenced in `lcm_sandbox/persona/__init__.py` — not in this repo.
+- [ ] Resolve the 7 failing persona tests. Root cause is local Privoxy proxy intercepting `http://127.0.0.1:*/api/personas`; fix is either an explicit `urllib.request.build_opener(ProxyHandler({}))` in the renderer's HTTP path or `NO_PROXY=127.0.0.1,localhost` in the test fixture.
 
 ### Phase 3 (artifact capture + cleanup)
 - [ ] Implement `lcm_sandbox/core/artifact_capture.py` per STEP 6.
