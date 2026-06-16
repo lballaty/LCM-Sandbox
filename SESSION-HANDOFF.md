@@ -8,7 +8,7 @@
 
 ## Status summary
 
-**Phases 1–4, WP-8, and the manual dev-sandbox flow are now committed.** Today's (2026-06-16) session productionized the manual dev-sandbox into a host-CLI-driven flow with a single allowlistable entry point. End-to-end verification ran 11/11 PASS (claude, codex, gemini, node, python3, git identity, /workspace ls + rw, .claude / .codex / .ai-dev-dotfiles mounts). Test suite: **57 passing, 0 failing, 1 skipped** (the 7 previously-red `test_persona_render_capture.py` failures were closed by the autouse `NO_PROXY` fixture in `conftest.py` — commit `9cda868`). Phase 2 + 5 design docs remain authoritative; verification gates GH `claude-code` #28293 / #36665 still unconfirmed; Phase 3 (artifact capture) still untouched.
+**Phases 1–4, WP-8, and the manual dev-sandbox flow are now committed.** Today's (2026-06-16) session productionized the manual dev-sandbox into a host-CLI-driven flow with a single allowlistable entry point. End-to-end verification ran 11/11 PASS (claude, codex, gemini, node, python3, git identity, /workspace ls + rw, .claude / .codex / .ai-dev-dotfiles mounts). Test suite: **57 passing, 0 failing, 1 skipped** (the 7 previously-red `test_persona_render_capture.py` failures were closed by the autouse `NO_PROXY` fixture in `conftest.py` — commit `9cda868`). Phase 2 + 5 design docs remain authoritative; verification gates GH `claude-code` #28293 / #36665 **resolved 2026-06-16** — see `docs/PHASE-5-PREREQS-VERIFICATION.md`. Phase 3 (artifact capture) still untouched.
 
 ### Commits landed today (2026-06-16)
 
@@ -211,8 +211,8 @@ All 10 Phase 1 tasks complete. All 4 follow-up tasks (#11 revert temp perms, #12
 ## Open follow-ups for next session (priority order)
 
 ### Pre-Phase-2 verification gates
-- [ ] Verify GitHub claude-code issue **#28293** (`.mcp.json` custom auth headers may not be forwarded on every POST) is fixed in installed Claude Code version — **blocks the Phase 5 bearer-in-header design**.
-- [ ] Check GitHub claude-code issue **#36665** (server-push notifications request) status — informs whether Phase 5 can rely on `elicitation/create` and `notifications/*` or must use the polling fallback (`get_more_context()` heartbeat).
+- [x] Verify GitHub claude-code issue **#28293** — resolved 2026-06-16. Issue closed `NOT_PLANNED`; documented workaround (`claude mcp add -s user` instead of `.mcp.json`) is viable. Small Phase 5 design adjustment needed. See `docs/PHASE-5-PREREQS-VERIFICATION.md`.
+- [x] Check GitHub claude-code issue **#36665** — resolved 2026-06-16. Issue closed `NOT_PLANNED`; tracking consolidated under #35072 (still open elsewhere). Phase 5 must use the polling fallback (`get_more_context()` heartbeat) as already designed. See `docs/PHASE-5-PREREQS-VERIFICATION.md`.
 - [ ] On a real consumer repo (e.g. `go-madeira`, `arionetworks-website`, `ballaty-rentals`), verify whether `.mcp.json` exists and what's in it; the entrypoint's sanitize step needs a real-world test case.
 
 ### Phase 2 (Dockerfile + entrypoint + launcher)
