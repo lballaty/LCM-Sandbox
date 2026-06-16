@@ -42,10 +42,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - && \
     node --version && npm --version
 
 # Agent CLIs, installed globally so they're on PATH for any user.
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli \
-    && claude --version || true \
-    && codex --version || true \
-    && gemini --version || true
+# Each CLI installs as a separate RUN so an install failure (e.g. transient
+# npm registry / network glitch on one package) fails the build instead of
+# being masked by `|| true` and producing an image missing one CLI.
+RUN npm install -g @anthropic-ai/claude-code && claude --version
+RUN npm install -g @openai/codex && codex --version
+RUN npm install -g @google/gemini-cli && gemini --version
 
 # aiagent user (UID 1000 matches Colima's default Lima VM user so bind-mount perms work).
 # Ubuntu 24.04 ships an 'ubuntu' user at UID 1000 — remove first.

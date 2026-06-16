@@ -130,7 +130,7 @@ Artifacts stored in DB for audit trail.
 
 ## Status
 
-_Last reconciled: 2026-06-15 (post-commit)_
+_Last reconciled: 2026-06-16_
 
 | Phase | Scope | Status |
 | :---- | :---- | :----- |
@@ -140,7 +140,7 @@ _Last reconciled: 2026-06-15 (post-commit)_
 | 4 | Container launch + `launch`/`stop`/`status` CLI commands | 🟡 **Implemented & committed** — `lcm_sandbox/core/docker_launcher.py` in main; hardening flags + `--egress-allowlist` still to verify |
 | 5 | AIDevOps integration + live MCP channel | ⬜ Designed (see orchestration + flows docs); blocked on verifying GH `claude-code` issues #28293 + #36665 |
 | WP-8 | HERMES persona renderer + capturer (scope added since original plan) | 🟡 Implemented & committed; 7 tests currently red under local Privoxy proxy interception |
-| Dev-sandbox template | Manual flow: image + launcher + runbook + `/dev-sandbox` skill | ✅ **Complete & committed** — `scripts/{Dockerfile.dev-sandbox, run-dev-sandbox.sh, README-dev-sandbox.md}` |
+| Dev-sandbox template (manual flow) | Image + launch/setup/verify/stop scripts + host CLI wrapper + runbook + `/dev-sandbox` skill | ✅ **Verified end-to-end 2026-06-16** — single allowlisted `dev-sandbox` CLI orchestrates `setup-dev-sandbox.sh` (build), `run-dev-sandbox.sh` (launch, label-tagged), `verify-dev-sandbox.sh` (11-check suite), `stop-dev-sandbox.sh` (image+label guarded). All 11 verify checks PASS. |
 
 Test suite (current tree): **50 passing / 7 failing / 1 skipped**. The 7 failures are all `test_persona_render_capture.py` hitting an interception by the local Privoxy proxy; the skipped test waits on a locally-built `lcm-hermes-agent:latest` image.
 
