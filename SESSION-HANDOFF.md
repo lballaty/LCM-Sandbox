@@ -8,15 +8,26 @@
 
 ## Status summary
 
-**Phases 1–4, WP-8, and the manual dev-sandbox flow are now committed.** Today's (2026-06-16) session productionized the manual dev-sandbox into a host-CLI-driven flow with a single allowlistable entry point. End-to-end verification ran 11/11 PASS (claude, codex, gemini, node, python3, git identity, /workspace ls + rw, .claude / .codex / .ai-dev-dotfiles mounts). Test suite: **50 passing, 7 failing, 1 skipped** — the 7 failures remain `test_persona_render_capture.py` (Privoxy). Phase 2 + 5 design docs remain authoritative; verification gates GH `claude-code` #28293 / #36665 still unconfirmed; Phase 3 (artifact capture) still untouched.
+**Phases 1–4, WP-8, and the manual dev-sandbox flow are now committed.** Today's (2026-06-16) session productionized the manual dev-sandbox into a host-CLI-driven flow with a single allowlistable entry point. End-to-end verification ran 11/11 PASS (claude, codex, gemini, node, python3, git identity, /workspace ls + rw, .claude / .codex / .ai-dev-dotfiles mounts). Test suite: **57 passing, 0 failing, 1 skipped** (the 7 previously-red `test_persona_render_capture.py` failures were closed by the autouse `NO_PROXY` fixture in `conftest.py` — commit `9cda868`). Phase 2 + 5 design docs remain authoritative; verification gates GH `claude-code` #28293 / #36665 still unconfirmed; Phase 3 (artifact capture) still untouched.
 
 ### Commits landed today (2026-06-16)
 
 ```
+c2aa8e2 docs(plan): add structured remaining-work plan for /execute-plan
 e81e700 feat(dev-sandbox): productionize manual flow with host CLI + setup/verify/stop scripts
+9cda868 fix: harden docker_launcher + bypass loopback proxy in tests
 ```
 
-(LCM-Sandbox only. Companion commits in `~/.ai-dev-dotfiles` `116adb9` for the host CLI binary, and `aidevops` `e6e68e0` for the AIDevOps follow-up tracker entry #110.)
+(LCM-Sandbox only. Companion commits in `~/.ai-dev-dotfiles` `116adb9` for the host CLI binary + `9dff4e4` for the `/dev-sandbox` skill, and `aidevops` `e6e68e0` for the AIDevOps follow-up tracker entry #110.)
+
+### Lockdown verification (2026-06-16, post-restart)
+
+| Check | Expected | Actual |
+| :--- | :--- | :--- |
+| Direct `docker exec <nonexistent> true` | Denied by Claude permission system | ✅ DENIED ("Permission to use Bash ... has been denied") |
+| `~/.ai-dev-dotfiles/bin/dev-sandbox list` | Allowed, exit 0 | ✅ ALLOWED, returned the empty managed-sandbox header (`NAMES STATUS IMAGE`) |
+
+The lockdown holds. Direct docker access is denied; only the wrapper CLI is allowlisted.
 
 ### Manual dev-sandbox template — current state (post-2026-06-16)
 
@@ -219,7 +230,7 @@ All 10 Phase 1 tasks complete. All 4 follow-up tasks (#11 revert temp perms, #12
 - [x] Console scripts `persona-state-renderer`, `persona-state-capturer` wired in `pyproject.toml`.
 - [ ] Document the WP-8 feature in `IMPLEMENTATION-PLAN.md` and `README.md` (currently absent from both).
 - [ ] Locate or commit the `HERMES-PERSONA-INTEGRATION-PLAN` doc referenced in `lcm_sandbox/persona/__init__.py` — not in this repo.
-- [ ] Resolve the 7 failing persona tests. Root cause is local Privoxy proxy intercepting `http://127.0.0.1:*/api/personas`; fix is either an explicit `urllib.request.build_opener(ProxyHandler({}))` in the renderer's HTTP path or `NO_PROXY=127.0.0.1,localhost` in the test fixture.
+- [x] Resolve the previously-failing persona tests. Closed 2026-06-16 by commit `9cda868` (autouse `NO_PROXY` fixture in `lcm_sandbox/tests/conftest.py`). Suite is now 57 passed / 0 failed / 1 skipped.
 
 ### Phase 3 (artifact capture + cleanup)
 - [ ] Implement `lcm_sandbox/core/artifact_capture.py` per STEP 6.
