@@ -1,6 +1,6 @@
 # Session Handoff — Phase 1 Implementation
 
-**Date:** 2026-06-15 (post-commit reconciliation)
+**Date:** 2026-06-16 (dev-sandbox productionization)
 **Branch:** main (pushed to origin)
 **Working directory:** `/Users/liborballaty/LocalProjects/GitHubProjectsDocuments/LCM-Sandbox`
 
@@ -8,31 +8,37 @@
 
 ## Status summary
 
-**Phases 1–4 and WP-8 are now committed.** All previously-uncommitted working-tree work was committed in 5 logical commits on 2026-06-15 and pushed to `origin/main`. A new manual dev-sandbox template (Dockerfile + launcher + runbook + global `/dev-sandbox` skill) was also added in the same session. Test suite: **50 passing, 7 failing, 1 skipped** — the 7 failures are still in `test_persona_render_capture.py` (local Privoxy proxy intercepts `127.0.0.1`); the skip is the docker-launcher integration test waiting on a locally-built image. Phase 2 + 5 design docs remain authoritative. Pre-Phase-2 verification gates (GH `claude-code` issues #28293 and #36665) have **not** yet been confirmed. Phase 3 (artifact capture) is still untouched.
+**Phases 1–4, WP-8, and the manual dev-sandbox flow are now committed.** Today's (2026-06-16) session productionized the manual dev-sandbox into a host-CLI-driven flow with a single allowlistable entry point. End-to-end verification ran 11/11 PASS (claude, codex, gemini, node, python3, git identity, /workspace ls + rw, .claude / .codex / .ai-dev-dotfiles mounts). Test suite: **50 passing, 7 failing, 1 skipped** — the 7 failures remain `test_persona_render_capture.py` (Privoxy). Phase 2 + 5 design docs remain authoritative; verification gates GH `claude-code` #28293 / #36665 still unconfirmed; Phase 3 (artifact capture) still untouched.
 
-### Commits landed this session
+### Commits landed today (2026-06-16)
 
 ```
-51c77e2 feat(dev-sandbox): manual sandbox template (image + launcher + runbook)
-c0b0bb7 feat(wp8): hermes persona renderer + capturer subsystem
-51697aa feat(phase4): docker launcher + launch/stop/status CLI commands
-829ff5a feat(phase2): hermes-variant image (Dockerfile + entrypoint + build helper)
-1e1f4c4 docs(trackers): reconcile to Phase 2 + Phase 4 + WP-8 working-tree reality
+e81e700 feat(dev-sandbox): productionize manual flow with host CLI + setup/verify/stop scripts
 ```
 
-### Manual dev-sandbox template (new, separate from agentic flow)
+(LCM-Sandbox only. Companion commits in `~/.ai-dev-dotfiles` `116adb9` for the host CLI binary, and `aidevops` `e6e68e0` for the AIDevOps follow-up tracker entry #110.)
 
-A hand-driven sandbox flow was added alongside the agentic `lcm-sandbox` CLI. It is distinct in purpose:
+### Manual dev-sandbox template — current state (post-2026-06-16)
 
-- **Image:** `lcm-dev-sandbox:latest` — ubuntu:24.04 + Node 20 + Python + uv + Claude Code + Codex CLI + Gemini CLI; bakes a `/Users/<HOST_USER>` → `/home/aiagent` symlink so absolute host paths in mounted dotfiles resolve.
-- **Launcher:** `scripts/run-dev-sandbox.sh` — mounts `.claude`/`.codex`/`.gemini` rw (so `/login` and CLI state persist), `.ai-dev-dotfiles`/`.gitconfig` ro. `REPO_PATH`, `CONTAINER_NAME`, `EXTRA_MOUNTS` are env-overridable.
-- **Runbook:** `scripts/README-dev-sandbox.md` — full end-to-end procedure with mount table, autonomous-Claude recipe, and common gotchas.
-- **Trigger:** global Claude Code skill at `~/.claude/skills/dev-sandbox/SKILL.md` (lives in the user's dotfiles repo at `~/.ai-dev-dotfiles/.claude/skills/`; uncommitted there as of session end).
-- **Colima profile:** dedicated `lcm-sandbox` profile (4 CPU / 8 GiB / 60 GiB, aarch64, docker runtime).
+A hand-driven sandbox flow distinct from the agentic `lcm-sandbox` CLI. **Productionized today** behind a single host CLI:
 
-**Operational caveat:** the image on disk was built once with Claude + Codex only and without the symlink. To get the committed template (Gemini + symlink) in the running container, rebuild and recreate.
+- **Host CLI (single allow-rule entry point):** `~/.ai-dev-dotfiles/bin/dev-sandbox` — subcommands: `create [REPO_PATH] [--name N] [--mount H:C[:MODE]]... [--rebuild]`, `verify NAME`, `restart NAME`, `stop NAME`, `list`, `enter NAME`, `help`. Dispatches to the four scripts below. Permission allow rule in `~/.claude/settings.json`: `Bash(/Users/liborballaty/.ai-dev-dotfiles/bin/dev-sandbox:*)`.
+- **Image:** `lcm-dev-sandbox:latest` — ubuntu:24.04 + Node 20 + Python + uv + Claude Code + Codex CLI + Gemini CLI (each CLI installs in its own RUN so single-package failures fail the build). Bakes `/Users/<HOST_USER>` → `/home/aiagent` symlink.
+- **Setup:** `scripts/setup-dev-sandbox.sh` — idempotent; pins `--context colima-lcm-sandbox`, pre-flights VM DNS to `deb.nodesource.com`, builds if image missing. `LCM_FORCE_REBUILD=1` to force.
+- **Launcher:** `scripts/run-dev-sandbox.sh` — mounts `.claude`/`.codex`/`.gemini` rw, `.ai-dev-dotfiles`/`.gitconfig` ro. Pins `--context`, adds `--label lcm-dev-sandbox=managed`, rejects `REPO_PATH` outside `$HOST_HOME` (Colima only mounts `/Users/<HOST_USER>` into the VM).
+- **Verifier:** `scripts/verify-dev-sandbox.sh` — in-container 11-check PASS/FAIL suite; non-zero exit on any fail.
+- **Stopper:** `scripts/stop-dev-sandbox.sh` — refuses unless image is `lcm-dev-sandbox:latest`; warns if `lcm-dev-sandbox=managed` label is missing.
+- **Skill (interactive trigger):** global Claude Code skill at `~/.claude/skills/dev-sandbox/SKILL.md` (lives in `~/.ai-dev-dotfiles/.claude/skills/`; committed there).
+- **Colima profile:** dedicated `lcm-sandbox` (4 CPU / 8 GiB / 60 GiB, aarch64, docker runtime).
+- **Image on disk:** present and verified; size ~750 MB.
 
-**First action next session:** verify Phase 4 hardening flags, fix the WP-8 persona-test Privoxy issue, and decide on Phase 3 entry point. The dev-sandbox skill backup in `~/.ai-dev-dotfiles` should also be committed there.
+**Permission cache caveat at session end:** during the 2026-06-16 session, direct `docker exec` / `docker stop` calls (issued by the agent outside the wrapper) succeeded despite no matching allow rule on disk. Claude Code's permission cache retained rules that were added and reverted within the session. On a fresh session start, only `Bash(/Users/liborballaty/.ai-dev-dotfiles/bin/dev-sandbox:*)` should match; direct docker should be denied. Recommended quick-check after restart: run `docker exec <some-container> true` directly — must fail with Claude's permission error.
+
+**Deferred follow-ups (tracked, not blocking):**
+- AIDevOps UI/API trigger using this CLI as backend — `aidevops/design/TODO.md` #110.
+- Phase D (cross-link to #106 allowed-paths policy).
+
+**First action next session:** start fresh, verify the lockdown holds (direct `docker exec` denied, `dev-sandbox` allowed), then back to Phase 3 (artifact capture) or WP-8 Privoxy fix.
 
 ---
 
