@@ -136,13 +136,13 @@ _Last reconciled: 2026-06-16_
 | :---- | :---- | :----- |
 | 1 | Core CLI + Phases 0–3 (preflight, worktree, sync, docker image check) | ✅ **Done & committed** — 43 Phase-1 tests passing |
 | 2 | Docker image + entrypoint (STEP 4.5) | ✅ **Complete & committed** — image + entrypoint + git-hooks installer + rm-shim + smoke-test + agent-profile templates + applier all in main; entrypoint refactored to delegate to them |
-| 3 | Artifact capture + cleanup | ⬜ Not started |
+| 3 | Artifact capture + cleanup | ✅ **Complete & committed** — `lcm_sandbox/core/artifact_capture.py` + `lcm-sandbox cleanup` CLI; filesystem archival under `~/.lcm-sandbox/artifacts/<sandbox-id>/`; idempotent teardown of container + worktree |
 | 4 | Container launch + `launch`/`stop`/`status` CLI commands | ✅ **Complete & committed** — launcher + CLI with full hardening (`--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only` + `--tmpfs`) and `--egress-allowlist` flag (advisory until Phase 5 host-side enforcement) |
 | 5 | AIDevOps integration + live MCP channel | ⬜ Designed (see orchestration + flows docs); blocked on verifying GH `claude-code` issues #28293 + #36665 |
 | WP-8 | HERMES persona renderer + capturer (scope added since original plan) | 🟡 Implemented & committed; 7 tests currently red under local Privoxy proxy interception |
 | Dev-sandbox template (manual flow) | Image + launch/setup/verify/stop scripts + host CLI wrapper + runbook + `/dev-sandbox` skill | ✅ **Verified end-to-end 2026-06-16** — single allowlisted `dev-sandbox` CLI orchestrates `setup-dev-sandbox.sh` (build), `run-dev-sandbox.sh` (launch, label-tagged), `verify-dev-sandbox.sh` (11-check suite), `stop-dev-sandbox.sh` (image+label guarded). All 11 verify checks PASS. |
 
-Test suite (current tree): **85 passing / 2 skipped**. The two skips are the integration tests gated on `lcm-hermes-agent:latest` being built locally.
+Test suite (current tree): **93 passing / 2 skipped**. The two skips are the integration tests gated on `lcm-hermes-agent:latest` being built locally.
 
 See [SESSION-HANDOFF.md](./SESSION-HANDOFF.md) and [IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md) for resume-from-here details.
 

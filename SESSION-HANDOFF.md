@@ -8,7 +8,7 @@
 
 ## Status summary
 
-**Phases 1–4, WP-8, and the manual dev-sandbox flow are now committed.** Today's (2026-06-16) session productionized the manual dev-sandbox into a host-CLI-driven flow with a single allowlistable entry point. End-to-end verification ran 11/11 PASS (claude, codex, gemini, node, python3, git identity, /workspace ls + rw, .claude / .codex / .ai-dev-dotfiles mounts). Test suite: **57 passing, 0 failing, 1 skipped** (the 7 previously-red `test_persona_render_capture.py` failures were closed by the autouse `NO_PROXY` fixture in `conftest.py` — commit `9cda868`). Phase 2 + 5 design docs remain authoritative; verification gates GH `claude-code` #28293 / #36665 **resolved 2026-06-16** — see `docs/PHASE-5-PREREQS-VERIFICATION.md`. Phase 3 (artifact capture) still untouched.
+**Phases 1–4, WP-8, the manual dev-sandbox flow, and all of Plan Phases 1–3 are now committed.** Phase 3 (artifact capture + cleanup) landed via `PLAN-REMAINING-WORK.md` execution: filesystem archival under `~/.lcm-sandbox/artifacts/<sandbox-id>/` + `lcm-sandbox cleanup` CLI. Phase 2 autonomous-flow hardening (docker-git-hooks, rm-shim, smoke-test, agent profile templates + applier, `--read-only` rootfs + `--tmpfs`, `--egress-allowlist` flag) all landed in the same execution. Test suite: **93 passing, 2 skipped** (both skips are integration tests gated on `lcm-hermes-agent:latest` being built locally). Verification gates GH `claude-code` #28293 / #36665 **resolved 2026-06-16** — see `docs/PHASE-5-PREREQS-VERIFICATION.md`. Plan Phases 4 (WP-8 reconciliation) and 5 (docs polish — USAGE.md, TROUBLESHOOTING.md) are next.
 
 ### Commits landed today (2026-06-16)
 

@@ -11,6 +11,7 @@ import click
 
 from lcm_sandbox import __version__
 from lcm_sandbox.commands.create import create_sandbox
+from lcm_sandbox.core.artifact_capture import cleanup_sandbox
 from lcm_sandbox.core.docker_launcher import (
     DEFAULT_IMAGE_TAG,
     container_status,
@@ -239,6 +240,67 @@ def stop(sandbox_id: str, keep: bool) -> None:
 def status(sandbox_id: str) -> None:
     """Print the current status of a sandbox container as JSON."""
     payload = container_status(sandbox_id)
+    click.echo(json.dumps(payload, indent=2))
+    sys.exit(0)
+
+
+@main.command("cleanup")
+@click.option("--sandbox-id", required=True,
+              help="Sandbox / run id (same value passed to `launch`).")
+@click.option("--worktree-path", required=True,
+              type=click.Path(file_okay=False),
+              help="Host worktree path produced by Phase 1.")
+@click.option("--branch", "branch_name", default="sandbox", show_default=True)
+@click.option("--allowed-paths", "allowed_paths_json",
+              default='{"write":[],"read":["*"]}', show_default=True,
+              help='JSON object the run used; only the shape matters here.')
+@click.option("--plan-id", default=None,
+              help="Plan id. Defaults to sandbox-id when omitted.")
+@click.option("--keep-artifacts/--remove-artifacts", default=True, show_default=True,
+              help="Whether to keep the archived artifacts directory under "
+                   "~/.lcm-sandbox/artifacts/<sandbox-id>/.")
+@click.option("--keep-worktree/--remove-worktree", default=False, show_default=True,
+              help="Whether to leave the host worktree on disk.")
+def cleanup(
+    sandbox_id: str,
+    worktree_path: str,
+    branch_name: str,
+    allowed_paths_json: str,
+    plan_id: str | None,
+    keep_artifacts: bool,
+    keep_worktree: bool,
+) -> None:
+    """Stop + remove the container and (by default) the worktree.
+
+    Idempotent: re-running after a successful cleanup returns
+    "already-absent" / "none" markers instead of failing. Artifacts captured
+    by a prior `capture` invocation are preserved unless --remove-artifacts.
+    """
+    try:
+        parsed = json.loads(allowed_paths_json)
+    except json.JSONDecodeError as exc:
+        _die(SandboxError(
+            "--allowed-paths is not valid JSON",
+            phase=6, step="6.6", error=str(exc),
+        ))
+
+    try:
+        config = SandboxConfig(
+            plan_id=plan_id or sandbox_id,
+            run_id=sandbox_id,
+            repo_path=Path(worktree_path).resolve(),
+            branch_name=branch_name,
+            allowed_paths=AllowedPaths(**parsed),
+            timeout_minutes=15,
+        )
+    except Exception as exc:
+        _die(SandboxError(f"invalid cleanup configuration: {exc}", phase=6, step="6.6"))
+
+    payload = cleanup_sandbox(
+        config,
+        keep_artifacts=keep_artifacts,
+        remove_worktree=not keep_worktree,
+    )
     click.echo(json.dumps(payload, indent=2))
     sys.exit(0)
 

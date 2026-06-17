@@ -29,8 +29,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `SESSION-HANDOFF.md` status summary now reflects the post-`9cda868` test count (57 passing / 0 failing / 1 skipped); the pre-existing "7 failing persona tests" follow-up is marked closed.
 - `SESSION-HANDOFF.md` Pre-Phase-2 verification gates section: both GH `claude-code` gates checked off with resolution date and a pointer to the verification doc.
 
+### Added — Plan Phase 3 (artifact capture + cleanup)
+- `lcm_sandbox/core/artifact_capture.py` — implements `SANDBOX-DETAILED-FLOW.md` STEP 6.1–6.7 (filesystem archival; S3/DB store deferred to Phase 5). Produces `manifest.json`, `commits.json`, `diff.patch`, `stdout.log`, `stderr.log`, `agent.log` under `~/.lcm-sandbox/artifacts/<sandbox-id>/`. Tolerant — partial captures are useful, single-step failures surface as warnings in the manifest rather than raising.
+- `lcm-sandbox cleanup` CLI subcommand — idempotent teardown of container + worktree + optional artifact directory. `--keep-artifacts/--remove-artifacts` and `--keep-worktree/--remove-worktree` toggles.
+- 8 unit tests in `test_artifact_capture.py` covering happy path, no-commits path, missing-container path, and four cleanup branches (remove-all, idempotent re-run, remove-artifacts, keep-worktree).
+
 ### Test suite
-- 85 passed, 2 skipped (was 57/0/1). Skips are the two Hermes-image-gated integration tests.
+- 93 passed, 2 skipped (was 85/2 after Plan Phase 2; was 57/0/1 at session start). Skips remain the two Hermes-image-gated integration tests.
 
 ## [0.5.0] — 2026-06-16 — Dev-sandbox productionization
 
