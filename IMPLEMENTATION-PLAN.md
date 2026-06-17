@@ -173,6 +173,38 @@ chmod +x "$1"
 
 ---
 
+### WP-8: HERMES Persona Subsystem
+
+**Added since the original plan was written.** The Hermes persona scope is owned canonically by the `aidevops` repo — see [`HERMES-PERSONA-INTEGRATION-PLAN.md`](./HERMES-PERSONA-INTEGRATION-PLAN.md) in this repo for the cross-repo pointer. This section captures only the LCM-Sandbox side of the contract.
+
+**What it is.** A Hermes persona is a named bundle of files (`config.yaml`, `SOUL.md`, `MEMORY.md`, `.env`, `skills/`, optional `mcp-servers.yaml` / `allowlists.yaml` / `persona.json`) that defines an agent's "identity": its prompt, its memory, its bundled skills, its model + MCP wiring. The AIDevOps platform stores persona rows + persona-scoped `typed_memory` + `skill_registry` rows; LCM-Sandbox materialises them into a host directory pre-launch and detects post-run mutations to emit `proposed_persona_changes` events.
+
+**Module: `lcm_sandbox/persona/`.**
+
+- `renderer.py` — `render_persona(RenderConfig) -> RenderResult`. Reads `/api/personas/<key>` from the platform (authenticated via `X-AIDevOps-Key` header), pulls persona-scoped typed_memory and skill_registry rows, applies substitution for `MODEL_PROVIDER`, `MODEL_KEY`, `MCP_SERVER_URL`, `MCP_TOKEN`, and writes the persona-owned file set into `output_dir`. Hashes every file for baseline comparison.
+- `capturer.py` — `capture_persona_mutations(CaptureConfig) -> CaptureResult`. Walks the post-run state, diffs against the baseline hashes, classifies changes (added / modified / removed), and POSTs `proposed_persona_changes` events back to the platform. Excludes Hermes-managed runtime dirs from the diff so only persona-owned files contribute.
+- `cli.py` — two console-script entry points (`persona-state-renderer`, `persona-state-capturer`) so the entrypoint can invoke them without importing the package.
+
+**Container wiring.** `scripts/entrypoint.sh` STEP 4.5.10 invokes `persona-state-renderer` when `HERMES_PERSONA` is set in the launcher env (passed by `lcm-sandbox launch --hermes-persona`). The renderer materialises files into `$HERMES_HOME` (`/home/aiagent/.hermes/` by default). Capture runs out-of-band — the host-side `lcm-sandbox cleanup` flow currently invokes capture before tearing the container down (filesystem archival only; live POST to the platform is wired into `capturer.py` but disabled by default).
+
+**Data flow.**
+
+```
+                       host                               container
+                       ────                               ─────────
+   AIDevOps API ◀─── renderer ─── docker cp ───▶ /home/aiagent/.hermes/
+   /api/personas       │                                  │
+                       │                                  │ hermes runs
+                       │                                  │ persona
+                       ▼                                  ▼
+   AIDevOps API ◀─── capturer ◀── diff baseline ── /home/aiagent/.hermes/
+   proposed_persona_changes
+```
+
+**Tests.** `lcm_sandbox/tests/test_persona_render_capture.py` exercises both halves with an in-process `HTTPServer` fixture standing in for the platform API. Until commit `9cda868`, these tests were red on machines running a local HTTP proxy (Privoxy) because urllib defaulted to the system proxy for `127.0.0.1`; the autouse `NO_PROXY` fixture in `conftest.py` fixes that.
+
+---
+
 ### 3. Configuration Files
 
 **`.claude/settings.json`** (project-level, optional):

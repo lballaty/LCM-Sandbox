@@ -34,8 +34,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `lcm-sandbox cleanup` CLI subcommand — idempotent teardown of container + worktree + optional artifact directory. `--keep-artifacts/--remove-artifacts` and `--keep-worktree/--remove-worktree` toggles.
 - 8 unit tests in `test_artifact_capture.py` covering happy path, no-commits path, missing-container path, and four cleanup branches (remove-all, idempotent re-run, remove-artifacts, keep-worktree).
 
+### Added — Plan Phase 4 (WP-8 persona reconciliation)
+- `HERMES-PERSONA-INTEGRATION-PLAN.md` — pointer at the canonical 793-line plan in the `aidevops` repo. Includes a "what lives here / what lives there" table so future readers don't try to copy the source of truth across repos.
+- New "WP-8: HERMES Persona Subsystem" section in `IMPLEMENTATION-PLAN.md` — describes the renderer + capturer modules, the in-container wiring (entrypoint STEP 4.5.10), the data flow, and the test setup.
+
+### Added — Plan Phase 5 (documentation polish)
+- `USAGE.md` — end-user quickstart for both flows: prerequisites, Colima profile setup, autonomous CLI lifecycle (`create` / `launch` / `status` / `stop` / `cleanup`), manual `dev-sandbox` CLI, autonomous-Claude recipe, where artifacts live.
+- `TROUBLESHOOTING.md` — symptom → cause → fix table covering all the gotchas accumulated in this session: TTY-less docker exec, `/login` persistence, Codex RO warning, hook path resolution, wrong Colima context, `HOST_HOME` mount constraint, permission-cache caveat, image missing, smoke-test failures, `--egress-allowlist` advisory status, Privoxy proxy interception, idempotent cleanup behavior, partial-capture warnings, Lima DNS issues, Xcode CLT, uv lockfile drift.
+
 ### Test suite
 - 93 passed, 2 skipped (was 85/2 after Plan Phase 2; was 57/0/1 at session start). Skips remain the two Hermes-image-gated integration tests.
+
+### Plan completion
+- `PLAN-REMAINING-WORK.md` Phase 1, Phase 2, Phase 3, Phase 4, Phase 5 — all closed. The only deferred item is Task 1.1 (remove stray image on `colima-backups`), blocked by the local `docker-colima-guard` hook on `docker rmi`; needs a real terminal.
 
 ## [0.5.0] — 2026-06-16 — Dev-sandbox productionization
 
