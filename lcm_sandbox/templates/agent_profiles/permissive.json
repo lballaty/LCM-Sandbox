@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "WebFetch(domain:*)"
+    ]
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "skipAutoPermissionPrompt": true,
+  "skipWebFetchPreflight": true,
+  "enableAllProjectMcpServers": true,
+  "disableAllHooks": true,
+  "fileCheckpointingEnabled": false,
+  "autoCompactEnabled": true,
+  "spinnerTipsEnabled": false,
+  "promptSuggestionEnabled": false
+}

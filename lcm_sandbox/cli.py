@@ -15,6 +15,7 @@ from lcm_sandbox.core.docker_launcher import (
     DEFAULT_IMAGE_TAG,
     container_status,
     launch_container,
+    parse_egress_allowlist,
     stop_container,
 )
 from lcm_sandbox.exceptions import (
@@ -155,6 +156,11 @@ def create(
 @click.option("--mcp-token", default=None)
 @click.option("--model-provider", default=None)
 @click.option("--model-key", default=None)
+@click.option("--egress-allowlist", "egress_allowlist_spec", default=None,
+              help='Comma-separated HOST[:PORT] entries the sandbox is allowed '
+                   'to reach. Advisory until the host-side restricted bridge '
+                   'is wired up; the value is forwarded as LCM_EGRESS_ALLOWLIST '
+                   'env var so the entrypoint can install rules where supported.')
 def launch(
     sandbox_id: str,
     worktree_path: str,
@@ -168,6 +174,7 @@ def launch(
     mcp_token: str | None,
     model_provider: str | None,
     model_key: str | None,
+    egress_allowlist_spec: str | None,
 ) -> None:
     """Launch a sandbox container (Phase 4)."""
     try:
@@ -190,6 +197,11 @@ def launch(
         _die(DockerLaunchError(f"invalid launch configuration: {exc}", step="4.1"))
 
     try:
+        egress_allowlist = parse_egress_allowlist(egress_allowlist_spec)
+    except ValueError as exc:
+        _die(DockerLaunchError(str(exc), step="4.1", spec=egress_allowlist_spec))
+
+    try:
         result = launch_container(
             config,
             image_tag=image_tag,
@@ -199,6 +211,7 @@ def launch(
             mcp_token=mcp_token,
             model_provider=model_provider,
             model_key=model_key,
+            egress_allowlist=egress_allowlist or None,
         )
     except SandboxError as exc:
         _die(exc)

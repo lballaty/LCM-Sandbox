@@ -135,14 +135,14 @@ _Last reconciled: 2026-06-16_
 | Phase | Scope | Status |
 | :---- | :---- | :----- |
 | 1 | Core CLI + Phases 0–3 (preflight, worktree, sync, docker image check) | ✅ **Done & committed** — 43 Phase-1 tests passing |
-| 2 | Docker image + entrypoint (STEP 4.5) | 🟡 **Partially implemented & committed** — `scripts/Dockerfile.hermes` + `scripts/entrypoint.sh` + build helper in main; git-hooks / rm-shim / smoke-test / agent-profile templates still missing |
+| 2 | Docker image + entrypoint (STEP 4.5) | ✅ **Complete & committed** — image + entrypoint + git-hooks installer + rm-shim + smoke-test + agent-profile templates + applier all in main; entrypoint refactored to delegate to them |
 | 3 | Artifact capture + cleanup | ⬜ Not started |
-| 4 | Container launch + `launch`/`stop`/`status` CLI commands | 🟡 **Implemented & committed** — `lcm_sandbox/core/docker_launcher.py` in main; hardening flags + `--egress-allowlist` still to verify |
+| 4 | Container launch + `launch`/`stop`/`status` CLI commands | ✅ **Complete & committed** — launcher + CLI with full hardening (`--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only` + `--tmpfs`) and `--egress-allowlist` flag (advisory until Phase 5 host-side enforcement) |
 | 5 | AIDevOps integration + live MCP channel | ⬜ Designed (see orchestration + flows docs); blocked on verifying GH `claude-code` issues #28293 + #36665 |
 | WP-8 | HERMES persona renderer + capturer (scope added since original plan) | 🟡 Implemented & committed; 7 tests currently red under local Privoxy proxy interception |
 | Dev-sandbox template (manual flow) | Image + launch/setup/verify/stop scripts + host CLI wrapper + runbook + `/dev-sandbox` skill | ✅ **Verified end-to-end 2026-06-16** — single allowlisted `dev-sandbox` CLI orchestrates `setup-dev-sandbox.sh` (build), `run-dev-sandbox.sh` (launch, label-tagged), `verify-dev-sandbox.sh` (11-check suite), `stop-dev-sandbox.sh` (image+label guarded). All 11 verify checks PASS. |
 
-Test suite (current tree): **50 passing / 7 failing / 1 skipped**. The 7 failures are all `test_persona_render_capture.py` hitting an interception by the local Privoxy proxy; the skipped test waits on a locally-built `lcm-hermes-agent:latest` image.
+Test suite (current tree): **85 passing / 2 skipped**. The two skips are the integration tests gated on `lcm-hermes-agent:latest` being built locally.
 
 See [SESSION-HANDOFF.md](./SESSION-HANDOFF.md) and [IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md) for resume-from-here details.
 

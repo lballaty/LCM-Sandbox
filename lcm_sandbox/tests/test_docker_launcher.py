@@ -20,6 +20,7 @@ from lcm_sandbox.core.docker_launcher import (
     HERMES_INTERNAL_PORT,
     _build_run_argv,
     launch_container,
+    parse_egress_allowlist,
 )
 from lcm_sandbox.models import AllowedPaths, SandboxConfig
 from lcm_sandbox.utils.shell import CommandResult
@@ -72,6 +73,16 @@ def test_build_run_argv_contains_required_flags(cfg, worktree):
     assert "--name" in argv and "run_xyz" in argv
     assert "--cap-drop=ALL" in argv
     assert "--security-opt=no-new-privileges" in argv
+    assert "--read-only" in argv
+    # When no egress allowlist is set, the env var must NOT be present.
+    flat_envs = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+    assert not any(e.startswith("LCM_EGRESS_ALLOWLIST=") for e in flat_envs)
+    # Each --tmpfs flag is a separate pair: ("--tmpfs", "<spec>").
+    tmpfs_specs = [argv[i + 1] for i, a in enumerate(argv) if a == "--tmpfs"]
+    assert any(s.startswith("/tmp:") for s in tmpfs_specs), tmpfs_specs
+    assert any(s.startswith("/var/tmp:") for s in tmpfs_specs), tmpfs_specs
+    assert any(s.startswith("/run:") for s in tmpfs_specs), tmpfs_specs
+    assert any(s.startswith("/home/aiagent/.cache:") for s in tmpfs_specs), tmpfs_specs
     # Volume mount
     assert any(a.startswith(f"{worktree}:/workspace") for a in argv), argv
     # Env vars
@@ -239,3 +250,150 @@ def test_integration_launch_and_teardown(tmp_path):
         assert p.returncode == 0, p.stderr
     finally:
         subprocess.run(["docker", "rm", "-f", cfg.run_id], capture_output=True)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not _image_present(DEFAULT_IMAGE_TAG),
+    reason=f"{DEFAULT_IMAGE_TAG} not present locally",
+)
+def test_integration_hardening_assertions(tmp_path):
+    """Validate the hardening flags actually take effect at container runtime:
+
+      - /workspace is writable.
+      - $HOME (aiagent) and host paths NOT explicitly mounted are not writable.
+      - rootfs (`/`) is read-only.
+      - git push is blocked by the installed pre-push hook.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / ".git" / "config").write_text("[core]\n\trepositoryformatversion = 0\n")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+
+    cfg = SandboxConfig(
+        plan_id="itest",
+        run_id="itest_harden_" + os.urandom(3).hex(),
+        repo_path=repo,
+        branch_name="itest",
+        allowed_paths=AllowedPaths(write=[], read=["*"]),
+        timeout_minutes=15,
+    )
+    result = launch_container(
+        cfg, image_tag=DEFAULT_IMAGE_TAG, worktree_path=wt,
+    )
+    try:
+        assert result.status == "running", result.error
+        name = cfg.run_id
+
+        # /workspace is writable.
+        p = subprocess.run(
+            ["docker", "exec", "--user", "aiagent", name,
+             "bash", "-lc", "touch /workspace/.write-probe && echo OK"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert p.returncode == 0, p.stderr
+
+        # rootfs is read-only: writing to / fails with EROFS.
+        p = subprocess.run(
+            ["docker", "exec", "--user", "aiagent", name,
+             "bash", "-lc", "touch /root-probe 2>&1 || echo ROFS"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert "Read-only" in p.stdout or "ROFS" in p.stdout, p.stdout
+
+        # /etc is read-only too.
+        p = subprocess.run(
+            ["docker", "exec", "--user", "aiagent", name,
+             "bash", "-lc", "touch /etc/probe 2>&1 || echo ROFS"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert "Read-only" in p.stdout or "ROFS" in p.stdout, p.stdout
+
+        # /tmp is writable (tmpfs).
+        p = subprocess.run(
+            ["docker", "exec", "--user", "aiagent", name,
+             "bash", "-lc", "touch /tmp/probe && echo OK"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert "OK" in p.stdout, p.stdout
+
+        # Pre-push hook present and rejects pushes.
+        p = subprocess.run(
+            ["docker", "exec", "--user", "aiagent", name,
+             "bash", "-lc",
+             "test -x /workspace/.git/hooks/pre-push && "
+             "/workspace/.git/hooks/pre-push 2>&1; echo EXIT=$?"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert "pushes are blocked" in p.stdout, p.stdout
+        assert "EXIT=1" in p.stdout, p.stdout
+    finally:
+        subprocess.run(["docker", "rm", "-f", cfg.run_id], capture_output=True)
+
+
+# ── Egress allowlist tests ──────────────────────────────────────────────────
+
+
+def test_parse_egress_allowlist_empty():
+    assert parse_egress_allowlist(None) == []
+    assert parse_egress_allowlist('') == []
+    assert parse_egress_allowlist('   ') == []
+
+
+def test_parse_egress_allowlist_host_only():
+    assert parse_egress_allowlist('api.openai.com') == [('api.openai.com', None)]
+
+
+def test_parse_egress_allowlist_host_port():
+    assert parse_egress_allowlist('api.openai.com:443') == [('api.openai.com', 443)]
+
+
+def test_parse_egress_allowlist_multiple():
+    result = parse_egress_allowlist('api.openai.com:443,registry.npmjs.org:443,deb.nodesource.com')
+    assert result == [
+        ('api.openai.com', 443),
+        ('registry.npmjs.org', 443),
+        ('deb.nodesource.com', None),
+    ]
+
+
+def test_parse_egress_allowlist_strips_whitespace():
+    assert parse_egress_allowlist(' foo:80 , bar:443 ') == [('foo', 80), ('bar', 443)]
+
+
+def test_parse_egress_allowlist_rejects_bad_host():
+    with pytest.raises(ValueError):
+        parse_egress_allowlist('not a host')
+
+
+def test_parse_egress_allowlist_rejects_bad_port():
+    with pytest.raises(ValueError):
+        parse_egress_allowlist('api.openai.com:not-a-port')
+
+
+def test_parse_egress_allowlist_rejects_out_of_range_port():
+    with pytest.raises(ValueError):
+        parse_egress_allowlist('api.openai.com:99999')
+
+
+def test_build_argv_includes_egress_env_when_set(cfg, tmp_path):
+    wt = tmp_path / 'wt'
+    wt.mkdir()
+    argv = _build_run_argv(
+        sandbox_config=cfg,
+        image_tag=DEFAULT_IMAGE_TAG,
+        worktree_path=wt,
+        hermes_persona=None,
+        mcp_url=None,
+        mcp_token=None,
+        model_provider=None,
+        model_key=None,
+        egress_allowlist=[('api.openai.com', 443), ('deb.nodesource.com', None)],
+    )
+    envs = [argv[i + 1] for i, a in enumerate(argv) if a == '-e']
+    egress = [e for e in envs if e.startswith('LCM_EGRESS_ALLOWLIST=')]
+    assert len(egress) == 1
+    assert egress[0] == 'LCM_EGRESS_ALLOWLIST=api.openai.com:443,deb.nodesource.com'
+

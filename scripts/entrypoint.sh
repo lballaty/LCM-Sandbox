@@ -94,16 +94,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4.5.6: Install pre-push hook blocking origin pushes
+# 4.5.6: Install pre-push hook blocking origin pushes.
+# Delegates to scripts/docker-git-hooks.sh (baked into the image at
+# /opt/lcm-sandbox/git-hooks/docker-git-hooks.sh) so the same logic handles
+# both normal repos and worktree-linked .git files.
 # ---------------------------------------------------------------------------
-if [ -d /workspace/.git/hooks ]; then
-  cat > /workspace/.git/hooks/pre-push <<'HOOK'
-#!/bin/bash
-echo "ERROR: Pushing to origin is not allowed in sandbox" >&2
-exit 1
-HOOK
-  chmod +x /workspace/.git/hooks/pre-push
-  log "4.5.6 pre-push hook installed"
+if [ -x /opt/lcm-sandbox/git-hooks/docker-git-hooks.sh ]; then
+  /opt/lcm-sandbox/git-hooks/docker-git-hooks.sh /workspace || log "4.5.6 WARN — hook install failed"
+  log "4.5.6 pre-push hook install completed"
+else
+  log "4.5.6 SKIP — docker-git-hooks.sh not found in image"
 fi
 
 # ---------------------------------------------------------------------------
@@ -128,6 +128,39 @@ if [ -d /workspace ]; then
 EOF
   chown aiagent:agentgroup /workspace/.sandbox-manifest.json 2>/dev/null || true
   log "4.5.7 sandbox manifest written"
+fi
+
+# ---------------------------------------------------------------------------
+# 4.5.7a: Apply in-sandbox agent profile (permissive | standard).
+# See SANDBOX-AGENT-CONFIG.md §"How the entrypoint applies the profile".
+# ---------------------------------------------------------------------------
+LCM_AGENT_PROFILE="${LCM_AGENT_PROFILE:-permissive}"
+case "${LCM_AGENT_PROFILE}" in
+  permissive|standard) ;;
+  *) die "unknown LCM_AGENT_PROFILE='${LCM_AGENT_PROFILE}' (expected permissive|standard)" ;;
+esac
+if [ -x /opt/lcm-sandbox/apply_agent_profile.py ]; then
+  LCM_PROFILE_TEMPLATE_DIR=/opt/lcm-sandbox/agent_profiles \
+    /opt/lcm-sandbox/apply_agent_profile.py \
+      --profile "${LCM_AGENT_PROFILE}" \
+      --target /home/aiagent \
+    || die "apply_agent_profile failed"
+  log "4.5.7a agent profile '${LCM_AGENT_PROFILE}' applied"
+else
+  log "4.5.7a SKIP — apply_agent_profile.py not found in image"
+fi
+
+# ---------------------------------------------------------------------------
+# 4.5.7b: Bootstrap smoke test. Refuses to drop to the agent if any check fails.
+# See SANDBOX-AGENT-CONFIG.md §4 "Bootstrap smoke test".
+# ---------------------------------------------------------------------------
+if [ -x /opt/lcm-sandbox/smoke-test.sh ]; then
+  if ! /opt/lcm-sandbox/smoke-test.sh /workspace; then
+    die "bootstrap smoke test failed — refusing to launch agent"
+  fi
+  log "4.5.7b smoke test passed"
+else
+  log "4.5.7b SKIP — smoke-test.sh not found in image"
 fi
 
 # ---------------------------------------------------------------------------

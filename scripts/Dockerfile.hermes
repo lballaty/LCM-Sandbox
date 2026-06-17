@@ -84,8 +84,13 @@ RUN hermes --version
 # The entrypoint drops privileges to aiagent before launching Hermes.
 USER root
 COPY scripts/entrypoint.sh /opt/lcm-sandbox/entrypoint.sh
-RUN chmod 755 /opt/lcm-sandbox/entrypoint.sh && \
-    chown root:root /opt/lcm-sandbox/entrypoint.sh
+COPY scripts/docker-git-hooks.sh /opt/lcm-sandbox/git-hooks/docker-git-hooks.sh
+COPY scripts/smoke-test.sh /opt/lcm-sandbox/smoke-test.sh
+COPY scripts/apply_agent_profile.py /opt/lcm-sandbox/apply_agent_profile.py
+COPY lcm_sandbox/templates/agent_profiles /opt/lcm-sandbox/agent_profiles
+COPY scripts/rm-shim.sh /usr/local/bin/rm
+RUN chmod 755 /opt/lcm-sandbox/entrypoint.sh /opt/lcm-sandbox/git-hooks/docker-git-hooks.sh /opt/lcm-sandbox/smoke-test.sh /opt/lcm-sandbox/apply_agent_profile.py /usr/local/bin/rm && \
+    chown -R root:root /opt/lcm-sandbox/entrypoint.sh /opt/lcm-sandbox/git-hooks /opt/lcm-sandbox/smoke-test.sh /opt/lcm-sandbox/apply_agent_profile.py /opt/lcm-sandbox/agent_profiles /usr/local/bin/rm
 
 # ENTRYPOINT runs as root; the entrypoint drops to aiagent.
 ENTRYPOINT ["/opt/lcm-sandbox/entrypoint.sh"]

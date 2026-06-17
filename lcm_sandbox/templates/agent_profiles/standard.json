@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "WebFetch(domain:*)",
+      "Bash(*)"
+    ]
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "skipWebFetchPreflight": true,
+  "enableAllProjectMcpServers": true,
+  "disableAllHooks": true
+}

@@ -6,13 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added
+### Added — Plan Phase 1 (housekeeping)
 - Structured remaining-work plan for `/execute-plan` autonomous mode (`PLAN-REMAINING-WORK.md`) — `c2aa8e2`.
 - Phase 5 prerequisite verification doc (`docs/PHASE-5-PREREQS-VERIFICATION.md`) recording resolution of GH `claude-code` issues #28293 and #36665.
+- `CHANGELOG.md` itself.
+
+### Added — Plan Phase 2 (autonomous launcher hardening)
+- `scripts/docker-git-hooks.sh` — pre-push deny hook installer. Handles both normal repos (`.git` is a directory) and worktrees (`.git` is a file with a `gitdir:` line, including relative-path form). Fixes a latent bug where the previous inline entrypoint logic silently skipped worktrees. 6 unit tests in `test_docker_git_hooks.py`.
+- `scripts/rm-shim.sh` — defensive `rm` wrapper installed at `/usr/local/bin/rm`. Forwards to `/bin/rm` for paths under a safelist (`/workspace`, `/tmp`, `/var/tmp`, `/home/aiagent/.cache`, `/home/aiagent/.local`); rejects everything else including symlink escapes (canonicalises via `readlink -f`). 6 unit tests in `test_rm_shim.py`.
+- `scripts/smoke-test.sh` — bootstrap smoke test that refuses to drop to the agent if any required pre-condition fails (UID 1000, `/workspace` mount, `.sandbox-manifest.json`, pre-push hook present, rm-shim resolution, at least one agent CLI on PATH).
+- `lcm_sandbox/templates/agent_profiles/{permissive,standard}.json` — canonical in-sandbox Claude Code settings from `SANDBOX-AGENT-CONFIG.md`.
+- `scripts/apply_agent_profile.py` — renders the requested profile into `/home/aiagent/.claude/settings.json` based on `$LCM_AGENT_PROFILE`. `LCM_PROFILE_TEMPLATE_DIR` env var overrides the template location so the in-container entrypoint can point at the image-baked path. 7 unit tests in `test_apply_agent_profile.py`.
+- `--read-only` rootfs in `docker_launcher.py` with explicit `--tmpfs` mounts for `/tmp`, `/var/tmp`, `/run`, and `/home/aiagent/.cache`.
+- `--egress-allowlist HOST[:PORT][,HOST[:PORT]]…` CLI flag on `lcm-sandbox launch`. Parsed via `parse_egress_allowlist()`; forwarded into the container as `LCM_EGRESS_ALLOWLIST` env var. Actual network enforcement is Phase 5 infrastructure work (requires a host-side restricted bridge because `--cap-drop=ALL` blocks in-container iptables); the flag plumbing is in place.
+- Integration test `test_integration_hardening_assertions` that asserts `/workspace` writable, rootfs + `/etc` read-only, `/tmp` writable, pre-push hook rejects pushes. Gated on the Hermes image being built locally; skipped otherwise.
+
+### Changed — Plan Phase 2
+- `scripts/entrypoint.sh` — refactored to delegate to `docker-git-hooks.sh`, `apply_agent_profile.py`, and `smoke-test.sh` (in steps 4.5.6, 4.5.7a, 4.5.7b). Smoke-test failure now hard-fails the entrypoint via `die`.
+- `scripts/Dockerfile.hermes` — copies the four new scripts plus the agent profile templates into `/opt/lcm-sandbox/`; installs `rm-shim.sh` as `/usr/local/bin/rm`.
 
 ### Changed
 - `SESSION-HANDOFF.md` status summary now reflects the post-`9cda868` test count (57 passing / 0 failing / 1 skipped); the pre-existing "7 failing persona tests" follow-up is marked closed.
 - `SESSION-HANDOFF.md` Pre-Phase-2 verification gates section: both GH `claude-code` gates checked off with resolution date and a pointer to the verification doc.
+
+### Test suite
+- 85 passed, 2 skipped (was 57/0/1). Skips are the two Hermes-image-gated integration tests.
 
 ## [0.5.0] — 2026-06-16 — Dev-sandbox productionization
 

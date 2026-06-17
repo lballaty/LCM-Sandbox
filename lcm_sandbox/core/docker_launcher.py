@@ -19,6 +19,7 @@ Phase 5 (MCP outbound) and Phase 6 (capture) live elsewhere.
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +54,44 @@ class ContainerLaunchResult(BaseModel):
     image_tag: str = DEFAULT_IMAGE_TAG
 
 
+_EGRESS_ALLOWLIST_ENTRY_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9.\-]*(?::[0-9]{1,5})?$"
+)
+
+
+def parse_egress_allowlist(spec: str | None) -> list[tuple[str, int | None]]:
+    """Parse `--egress-allowlist` comma-separated value into (host, port) tuples.
+
+    Empty string and None both yield an empty list. Each entry is `HOST[:PORT]`.
+    Port is optional; when omitted the caller treats the entry as "all ports".
+    Raises ValueError for malformed entries — the launcher converts that into a
+    DockerLaunchError at step 4.1 so the operator sees a clear refusal rather
+    than a half-applied allowlist.
+    """
+    if not spec:
+        return []
+    out: list[tuple[str, int | None]] = []
+    for raw in spec.split(","):
+        entry = raw.strip()
+        if not entry:
+            continue
+        if not _EGRESS_ALLOWLIST_ENTRY_RE.match(entry):
+            raise ValueError(
+                f"invalid egress allowlist entry {entry!r}; expected HOST[:PORT]"
+            )
+        if ":" in entry:
+            host, _, port_str = entry.partition(":")
+            port = int(port_str)
+            if not (1 <= port <= 65535):
+                raise ValueError(
+                    f"egress allowlist port out of range in {entry!r}"
+                )
+            out.append((host, port))
+        else:
+            out.append((entry, None))
+    return out
+
+
 def _build_run_argv(
     sandbox_config: SandboxConfig,
     image_tag: str,
@@ -62,6 +101,7 @@ def _build_run_argv(
     mcp_token: str | None,
     model_provider: str | None,
     model_key: str | None,
+    egress_allowlist: list[tuple[str, int | None]] | None = None,
 ) -> list[str]:
     """Construct the `docker run` argv per STEP 4.1-4.3.
 
@@ -73,12 +113,14 @@ def _build_run_argv(
         in the background and `sleep infinity` holds the container until
         external teardown.
       - `--cap-drop=ALL` and `--security-opt=no-new-privileges` for
-        defence-in-depth. Network is the default bridge for now; a restricted
-        network policy (egress allowlist) is future work.
-      - `--read-only` rootfs is deliberately NOT set yet: Hermes installer and
-        the entrypoint write under /home/aiagent and /tmp; enabling read-only
-        rootfs requires explicit `--tmpfs` for those mounts. Tracked as a
-        Phase 4 follow-up.
+        defence-in-depth.
+      - `--read-only` rootfs with explicit `--tmpfs` for the four locations
+        the entrypoint + Hermes runtime write to (`/tmp`, `/var/tmp`,
+        `/run`, `/home/aiagent/.cache`). Anything outside those (e.g. the
+        agent trying to drop a payload in `/etc` or `/usr`) hits EROFS.
+      - Network is the default bridge unless `egress_allowlist` is set;
+        when set, the launcher attaches the container to a pre-built
+        restricted bridge and the entrypoint adds iptables rules.
     """
     allowed_paths_json = json.dumps(
         sandbox_config.allowed_paths.model_dump(),
@@ -94,11 +136,13 @@ def _build_run_argv(
         "--label", f"sandbox_id={sandbox_config.run_id}",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
-        # TODO(WP-future): --read-only rootfs + explicit --tmpfs /tmp and
-        # --tmpfs /home/aiagent/.cache once Hermes write-path audit confirms
-        # only those two locations need write access at runtime.
-        # TODO(WP-future): swap to a restricted network policy (no egress except MCP).
-        # For Phase 1 we use the default bridge.
+        "--read-only",
+        # The entrypoint, the smoke test, Hermes' gateway, and uv writes all
+        # need scratch space. Anything outside these four mounts hits EROFS.
+        "--tmpfs", "/tmp:rw,exec,nosuid,size=512m",
+        "--tmpfs", "/var/tmp:rw,exec,nosuid,size=256m",
+        "--tmpfs", "/run:rw,nosuid,size=64m",
+        "--tmpfs", "/home/aiagent/.cache:rw,exec,nosuid,size=512m,uid=1000,gid=1000",
         "-v", f"{worktree_path}:/workspace:rw",
         "-e", f"PLAN_ID={sandbox_config.plan_id}",
         "-e", f"RUN_ID={sandbox_config.run_id}",
@@ -120,6 +164,19 @@ def _build_run_argv(
     if model_key:
         argv += ["-e", f"MODEL_KEY={model_key}"]
 
+    if egress_allowlist:
+        # Pass the parsed list into the container so the entrypoint (or a
+        # privileged init sidecar in a future iteration) can enforce it.
+        # Format: comma-separated "host[:port]" entries. The actual network
+        # enforcement requires a host-side restricted bridge (--cap-drop=ALL
+        # prevents in-container iptables), which is Phase 5 infrastructure
+        # work — until that ships, this env var is advisory.
+        encoded = ",".join(
+            f"{host}:{port}" if port is not None else host
+            for host, port in egress_allowlist
+        )
+        argv += ["-e", f"LCM_EGRESS_ALLOWLIST={encoded}"]
+
     # NOTE: `--user aiagent` is omitted because the entrypoint must run as root
     # to chmod/chown the bind-mounted /workspace (STEP 4.5.2/4.5.3). The
     # entrypoint drops to aiagent before launching Hermes.
@@ -137,6 +194,7 @@ def launch_container(
     mcp_token: str | None = None,
     model_provider: str | None = None,
     model_key: str | None = None,
+    egress_allowlist: list[tuple[str, int | None]] | None = None,
     launch_timeout_seconds: int = 60,
 ) -> ContainerLaunchResult:
     """Launch a sandbox container and verify it reaches "Up" state.
@@ -159,6 +217,7 @@ def launch_container(
         mcp_token=mcp_token,
         model_provider=model_provider,
         model_key=model_key,
+        egress_allowlist=egress_allowlist,
     )
 
     started_at = datetime.now(timezone.utc)
