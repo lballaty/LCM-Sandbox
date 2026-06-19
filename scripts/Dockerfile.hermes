@@ -79,6 +79,38 @@ ENV HERMES_HOME=/home/aiagent/.hermes
 # Sanity check.
 RUN hermes --version
 
+# --- Control plane integration (TODO #112) --------------------------------
+# Install the lcm-sandbox Python package so the `sandbox-emit` CLI is available
+# to the agent (and to Hermes skills that wrap it). sandbox-emit writes the
+# Phase A control-plane files in /control/ per SANDBOX-CONTROL-SCHEMA.md.
+#
+# The lcm-sandbox package itself is the same one already used at the host
+# side for worktree + launcher orchestration. Inside the image, only the
+# control-plane code path is exercised; the worktree/launcher code paths are
+# inactive because the container does not orchestrate further containers.
+#
+# We need to copy the package source into the image and install it. The build
+# context for this Dockerfile is the LCM-Sandbox repo root.
+USER aiagent
+WORKDIR /home/aiagent
+COPY --chown=aiagent:agentgroup pyproject.toml /tmp/lcm-sandbox-src/pyproject.toml
+COPY --chown=aiagent:agentgroup lcm_sandbox /tmp/lcm-sandbox-src/lcm_sandbox
+RUN /home/aiagent/.local/bin/uv pip install --system --break-system-packages --no-deps /tmp/lcm-sandbox-src 2>/dev/null || \
+    pip install --user --break-system-packages /tmp/lcm-sandbox-src && \
+    rm -rf /tmp/lcm-sandbox-src
+# Verify sandbox-emit is on PATH
+RUN sandbox-emit --help >/dev/null 2>&1 || (echo "sandbox-emit not installed correctly" && exit 1)
+
+# Standard env var for the control directory (overridable at docker run if needed).
+ENV CONTROL_DIR=/control
+
+# Container path for the control dir mount; the actual host bind-mount is
+# attached at docker run time (-v ~/.lcm-sandbox/runs/<id>:/control:rw).
+# Pre-creating the path with the right owner avoids permission surprises.
+USER root
+RUN mkdir -p /control && chown aiagent:agentgroup /control
+# --------------------------------------------------------------------------
+
 # Switch to root to install the WP-2 entrypoint, which must run as root inside
 # the container to chmod/chown the bind-mounted /workspace (STEP 4.5.2/4.5.3).
 # The entrypoint drops privileges to aiagent before launching Hermes.

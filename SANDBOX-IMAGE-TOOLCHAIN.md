@@ -173,36 +173,42 @@ All commands must exit 0 and produce non-empty output. Missing agent CLIs are wa
 
 The agentic sandbox control plane design (`SANDBOX-CONTROL-PLANE.html`, `SANDBOX-CONTROL-SCHEMA.md`) requires three image-level capabilities. The current `Dockerfile.hermes` partially provides them but with **one significant naming question that must be resolved before further changes**.
 
-### Naming-conflict observation
+### Naming clarification (2026-06-19)
 
-The image installs **NousResearch's Hermes Agent** at line 66 of `Dockerfile.hermes` (`install.sh` from `NousResearch/hermes-agent`). This is the open-source agent runtime — distinct from the **Platform Hermes** (LLM router + data classification policy + audit) being built in aidevops uncommitted work (`server/modules/llm-routing/`, `tools/llm_router/`, `tools/policy/`).
+**Resolved:** "Hermes" throughout this codebase means **NousResearch's Hermes Agent**, installed in `Dockerfile.hermes` at line 66 via `install.sh` from `NousResearch/hermes-agent`. There is no separate "Platform Hermes."
 
-The control plane design refers to "Hermes" in the sense of the Platform Hermes — the content-layer + control-endpoint component that AIDevOps talks to. Two distinct things share the name in the current codebase.
+The aidevops uncommitted work in `server/modules/llm-routing/`, `server/modules/personas/`, `tools/llm_router/`, `tools/policy/` is the platform's integration of this same Hermes — defining personas, configuring routing, and enforcing classification policy via Hermes skills/config. It is not a separate Hermes implementation.
 
-**Decision needed before integrating control plane:**
+This means:
+- The Hermes that runs inside `lcm-hermes-agent:latest` is the one the control plane design refers to.
+- Classification policy enforcement happens **inside Hermes** via skills/config, not by a separate component.
+- "AIDevOps talks to Hermes" means AIDevOps talks to the in-container Hermes runtime (via the Phase A `/control/` filesystem or future Phase B MCP).
+- No image-level naming change needed.
 
-1. Are these the same Hermes? (Plausibly the aidevops work is wrapping/extending NousResearch Hermes.)
-2. If different: which one is the control-plane endpoint? Where does it run inside the image?
-3. If both go in the image, how do they compose? (E.g., NousResearch Hermes as the agent runtime, Platform Hermes as a sidecar wrapper.)
-4. Rename one to avoid future confusion?
+### What has been done in the image (2026-06-19, commit landing this section)
 
-### What CAN be done in the image without resolving the naming question
+1. **`lcm-sandbox` Python package is installed** in the image (`COPY pyproject.toml + lcm_sandbox/` into `/tmp/lcm-sandbox-src` then `pip install`). This makes the `sandbox-emit` CLI available on PATH for the in-container agent and for Hermes skills that wrap it.
 
-These are control-plane-neutral additions safe to make regardless of how the Hermes naming resolves:
+2. **`CONTROL_DIR=/control` env var is set** in the image so any actor inside (agent direct, sandbox-emit, Hermes skills) uses the same convention.
 
-1. **Install the `lcm-sandbox` Python package inside the image** so the `sandbox-emit` CLI (entry point in `pyproject.toml`) is available to the in-container agent. Currently `Dockerfile.hermes` copies some LCM scripts (`entrypoint.sh`, `apply_agent_profile.py`) but does not pip-install the package itself.
+3. **`/control` directory is pre-created** with `aiagent:agentgroup` ownership so the bind mount lands on the right perms at docker run time.
 
-2. **Set `CONTROL_DIR=/control` env var** so `sandbox-emit` and any future Hermes integration use the same path.
+### What still needs work (next sessions)
 
-3. **Document `/control` as a required bind mount** in the launcher and runbook (already declared in `SANDBOX-CONTROL-PLANE.html` "Mounts and files" section).
+1. **`entrypoint.sh` integration with the control plane.** The current entrypoint loads the persona and launches Hermes. It needs to additionally:
+   - On startup: read `/control/plan/plan.json`, emit `launched` and `plan_loaded` events via `sandbox-emit event ...`.
+   - Start a long-lived `sandbox-emit heartbeat-daemon` background process so the run does not appear stalled.
+   - On Hermes exit: emit `tasks_complete` or `failed` event with exit code; update status phase accordingly.
+   - On SIGTERM: emit `failed` event with `reason=cancelled` and clean shutdown.
 
-4. **Expose port 8765/tcp on localhost** (no `EXPOSE` to the host network) as the convention for the control endpoint when Platform Hermes is integrated. The agent inside the container connects to `http://localhost:8765/v1/...` per the schemas in `SANDBOX-CONTROL-SCHEMA.md`.
+2. **Hermes-side classification policy and ask/answer wiring.** Hermes skills or config that:
+   - Apply data classification policy on outbound LLM calls (consumes `aidevops/design/LLM-DATA-CLASSIFICATION-POLICY.md`).
+   - Convert "I need operator input" intent into outbox `ask` messages via `sandbox-emit ask`.
+   - Surface inbox answers back to Hermes as tool results.
 
-### Required follow-up
+   These belong to the in-flight aidevops `server/modules/personas/` and `tools/llm_router/` work; this image just hosts the result.
 
-- **Resolve the naming question** with the aidevops Hermes work owner.
-- **If Platform Hermes is to be installed in the image**, define its packaging (Python wheel, npm package, copied directory) and update this doc with the install step.
-- **Until Platform Hermes ships**, the Phase A control plane works via the in-container `sandbox-emit` CLI — the agent calls it directly from its tool invocations to emit status and events. Platform Hermes (when it lands) replaces direct CLI invocation with library calls from a long-running HTTP server on port 8765.
+3. **HTTP endpoint at `localhost:8765`** (Phase B prep). Not needed for Phase A (filesystem-only). When the MCP transport lands per `SANDBOX-ORCHESTRATION.md`, Hermes will expose this endpoint and AIDevOps will switch from filesystem polling to live MCP. Schemas (`SANDBOX-CONTROL-SCHEMA.md`) are already designed to carry the same shapes across both transports.
 
 ### Cross-references
 
