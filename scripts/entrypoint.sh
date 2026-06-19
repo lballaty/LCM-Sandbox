@@ -240,8 +240,55 @@ if [ -n "${HERMES_PERSONA}" ]; then
     tail -n 50 /tmp/hermes-gateway.log >&2 || true
   fi
 
-  # Hold the container until external teardown.
-  exec sleep infinity
+  # -------------------------------------------------------------------------
+  # 4.5.10a: Control plane integration (TODO #111 + #112 Gap A).
+  # See aidevops/design/AGENTIC-SANDBOX-IMPLEMENTATION-ROADMAP.md.
+  #
+  # The sandbox-emit CLI is installed in the image (Dockerfile.hermes installs
+  # the lcm-sandbox Python package). CONTROL_DIR is set to /control by the
+  # Dockerfile and the dir is bind-mounted by the launcher.
+  #
+  # We emit launched + plan_loaded events, start the heartbeat daemon, and
+  # set a trap so terminal events (failed/cancelled) are emitted on container
+  # stop. All emit calls run as aiagent because /control is owned by aiagent.
+  # -------------------------------------------------------------------------
+  if [ -d /control ]; then
+    # Best-effort: missing sandbox-emit (older image) must not crash the run.
+    if RUN_AS_AIAGENT "command -v sandbox-emit" >/dev/null 2>&1; then
+      RUN_AS_AIAGENT "RUN_ID='${RUN_ID}' CONTROL_DIR=/control sandbox-emit event launched" \
+        >/dev/null 2>&1 || log "4.5.10a WARN — launched event emit failed"
+      if [ -f /control/plan/plan.json ]; then
+        RUN_AS_AIAGENT "RUN_ID='${RUN_ID}' CONTROL_DIR=/control sandbox-emit plan-loaded" \
+          >/dev/null 2>&1 || log "4.5.10a WARN — plan-loaded event emit failed"
+      fi
+      # Heartbeat daemon as background. Long-running; survives until container stops.
+      RUN_AS_AIAGENT "RUN_ID='${RUN_ID}' CONTROL_DIR=/control nohup sandbox-emit heartbeat-daemon --interval 10 >/tmp/heartbeat.log 2>&1 &" \
+        >/dev/null 2>&1 || log "4.5.10a WARN — heartbeat-daemon failed to start"
+      log "4.5.10a control plane wired (launched, plan-loaded, heartbeat-daemon)"
+    else
+      log "4.5.10a SKIP — sandbox-emit not installed in image (pre-#112 image)"
+    fi
+  else
+    log "4.5.10a SKIP — /control not mounted (no plan delivered)"
+  fi
+
+  # Trap for terminal events. SIGTERM is what docker stop sends; SIGINT covers
+  # interactive ctrl-c. On either, emit a 'failed' event with reason=cancelled
+  # before propagating the exit. Best-effort; never blocks shutdown.
+  _emit_cancelled() {
+    if [ -d /control ] && RUN_AS_AIAGENT "command -v sandbox-emit" >/dev/null 2>&1; then
+      RUN_AS_AIAGENT "RUN_ID='${RUN_ID}' CONTROL_DIR=/control sandbox-emit failed --reason cancelled --error 'container received SIGTERM/SIGINT' --exit-code 130" \
+        >/dev/null 2>&1 || true
+    fi
+    exit 130
+  }
+  trap _emit_cancelled SIGTERM SIGINT
+
+  # Hold the container until external teardown. NOT exec'd because we need
+  # the trap to fire in this shell when docker stop sends SIGTERM.
+  sleep infinity &
+  SLEEP_PID=$!
+  wait "${SLEEP_PID}"
 fi
 
 # ---------------------------------------------------------------------------
