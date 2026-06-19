@@ -46,7 +46,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - 93 passed, 2 skipped (was 85/2 after Plan Phase 2; was 57/0/1 at session start). Skips remain the two Hermes-image-gated integration tests.
 
 ### Plan completion
-- `PLAN-REMAINING-WORK.md` Phase 1, Phase 2, Phase 3, Phase 4, Phase 5 — all closed. The only deferred item is Task 1.1 (remove stray image on `colima-backups`), blocked by the local `docker-colima-guard` hook on `docker rmi`; needs a real terminal.
+- `PLAN-REMAINING-WORK.md` Phase 1, Phase 2, Phase 3, Phase 4, Phase 5 — all closed. Plan Task 1.1 (remove stray image on `colima-backups`) verified closed 2026-06-19; removal happened outside the agent session.
+
+### Added — post-execute-plan
+- `SANDBOX-CONTROL-PLANE.html` (commit `74ce969`, authored by user) — control-plane design snapshot: Hermes-in-image, dual-mount model (workspace + control), plan delivery, status/events/inbox/outbox, completion → downstream workflow handoff. Snapshot draft 2026-06-18; pending corrections per `aidevops` TODO #115 (sparse-checkout v1, no host-side POSIX, `required_paths` + `read_exclusions`, `repo_kind`, topology-driven resolution). Design-only — no implementation in this repo yet.
 
 ## [0.5.0] — 2026-06-16 — Dev-sandbox productionization
 
