@@ -166,3 +166,49 @@ All commands must exit 0 and produce non-empty output. Missing agent CLIs are wa
 - Not a final Dockerfile. The Dockerfile is a Phase 2 deliverable.
 - Not a list of every transitive dep. apt and npm handle those.
 - Not a commitment to never split the image. We will split if size or update cadence demands it.
+
+---
+
+## Control plane integration (added 2026-06-19; tracks aidevops TODO #112)
+
+The agentic sandbox control plane design (`SANDBOX-CONTROL-PLANE.html`, `SANDBOX-CONTROL-SCHEMA.md`) requires three image-level capabilities. The current `Dockerfile.hermes` partially provides them but with **one significant naming question that must be resolved before further changes**.
+
+### Naming-conflict observation
+
+The image installs **NousResearch's Hermes Agent** at line 66 of `Dockerfile.hermes` (`install.sh` from `NousResearch/hermes-agent`). This is the open-source agent runtime — distinct from the **Platform Hermes** (LLM router + data classification policy + audit) being built in aidevops uncommitted work (`server/modules/llm-routing/`, `tools/llm_router/`, `tools/policy/`).
+
+The control plane design refers to "Hermes" in the sense of the Platform Hermes — the content-layer + control-endpoint component that AIDevOps talks to. Two distinct things share the name in the current codebase.
+
+**Decision needed before integrating control plane:**
+
+1. Are these the same Hermes? (Plausibly the aidevops work is wrapping/extending NousResearch Hermes.)
+2. If different: which one is the control-plane endpoint? Where does it run inside the image?
+3. If both go in the image, how do they compose? (E.g., NousResearch Hermes as the agent runtime, Platform Hermes as a sidecar wrapper.)
+4. Rename one to avoid future confusion?
+
+### What CAN be done in the image without resolving the naming question
+
+These are control-plane-neutral additions safe to make regardless of how the Hermes naming resolves:
+
+1. **Install the `lcm-sandbox` Python package inside the image** so the `sandbox-emit` CLI (entry point in `pyproject.toml`) is available to the in-container agent. Currently `Dockerfile.hermes` copies some LCM scripts (`entrypoint.sh`, `apply_agent_profile.py`) but does not pip-install the package itself.
+
+2. **Set `CONTROL_DIR=/control` env var** so `sandbox-emit` and any future Hermes integration use the same path.
+
+3. **Document `/control` as a required bind mount** in the launcher and runbook (already declared in `SANDBOX-CONTROL-PLANE.html` "Mounts and files" section).
+
+4. **Expose port 8765/tcp on localhost** (no `EXPOSE` to the host network) as the convention for the control endpoint when Platform Hermes is integrated. The agent inside the container connects to `http://localhost:8765/v1/...` per the schemas in `SANDBOX-CONTROL-SCHEMA.md`.
+
+### Required follow-up
+
+- **Resolve the naming question** with the aidevops Hermes work owner.
+- **If Platform Hermes is to be installed in the image**, define its packaging (Python wheel, npm package, copied directory) and update this doc with the install step.
+- **Until Platform Hermes ships**, the Phase A control plane works via the in-container `sandbox-emit` CLI — the agent calls it directly from its tool invocations to emit status and events. Platform Hermes (when it lands) replaces direct CLI invocation with library calls from a long-running HTTP server on port 8765.
+
+### Cross-references
+
+- `SANDBOX-CONTROL-PLANE.html` — design + flows
+- `SANDBOX-CONTROL-SCHEMA.md` — wire-format contracts that Platform Hermes must implement
+- `lcm_sandbox/core/control_plane.py` — Python writers used by `sandbox-emit` (and by Platform Hermes when it lands)
+- `lcm_sandbox/cli_emit.py` — the `sandbox-emit` CLI entry point
+- aidevops TODO #112 (this work item)
+- aidevops uncommitted: `server/modules/llm-routing/`, `tools/llm_router/`, `tools/policy/`, `server/modules/personas/` — where Platform Hermes is currently being built

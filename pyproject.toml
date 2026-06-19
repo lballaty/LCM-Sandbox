@@ -28,6 +28,7 @@ dev = [
 lcm-sandbox = "lcm_sandbox.cli:main"
 persona-state-renderer = "lcm_sandbox.persona.cli:render_cmd"
 persona-state-capturer = "lcm_sandbox.persona.cli:capture_cmd"
+sandbox-emit = "lcm_sandbox.cli_emit:main"
 
 [tool.setuptools.packages.find]
 include = ["lcm_sandbox*"]
