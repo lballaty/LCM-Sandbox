@@ -63,6 +63,7 @@ lcm-sandbox cleanup --sandbox-id sandbox-run_xxx-...
 - **[SANDBOX-IMAGE-TOOLCHAIN.md](./SANDBOX-IMAGE-TOOLCHAIN.md)** — Phase 2 Dockerfile design (universal image, ~1 GB target)
 - **[SANDBOX-ORCHESTRATION.md](./SANDBOX-ORCHESTRATION.md)** + **[.html](./SANDBOX-ORCHESTRATION.html)** — Secure live IPC channel (MCP Streamable HTTP, OAuth 2.1 per-run tokens)
 - **[SANDBOX-FLOWS.html](./SANDBOX-FLOWS.html)** — End-to-end mermaid flows: direct CLI / AIDevOps UI / AIDevOps programmatic, plus cleanup, failure, and state machine
+- **[SANDBOX-CONTROL-PLANE.html](./SANDBOX-CONTROL-PLANE.html)** — Control plane design: Hermes-in-image, dual-mount model (workspace + control), plan delivery, status/events/inbox/outbox, completion → downstream workflow handoff. Snapshot draft 2026-06-18; corrections pending per aidevops TODO #115 (sparse checkout v1, no host-side POSIX, required_paths + read_exclusions, repo_kind, topology-driven resolution).
 - **[SESSION-HANDOFF.md](./SESSION-HANDOFF.md)** — Resume-from-here doc for the next session
 
 ### Key Concepts
