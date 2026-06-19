@@ -91,15 +91,15 @@
 <div class="nav">
   <a href="#overview">Overview</a>
   <a href="#layering">Layering</a>
-  <a href="#mounts">Mounts &amp; Files</a>
+  <a href="#enforcement">Enforcement</a>
+  <a href="#mounts">Mounts</a>
   <a href="#worktree">Worktree</a>
-  <a href="#flow-launch">Launch Flow</a>
-  <a href="#flow-status">Status &amp; Events</a>
-  <a href="#flow-blocked">Blocked-on-Input</a>
-  <a href="#flow-complete">Completion &amp; Next Step</a>
-  <a href="#flow-fail">Failure</a>
+  <a href="#repo-kind">Repo kind</a>
+  <a href="#topology">Topology</a>
+  <a href="#flows">Flows</a>
   <a href="#transport">Transport</a>
-  <a href="#schema">Schemas</a>
+  <a href="#schemas">Schemas</a>
+  <a href="#tests">Tests</a>
   <a href="#decisions">Decisions</a>
 </div>
 
@@ -107,60 +107,65 @@
 <div class="sub">
   How AIDevOps controls, observes, and reacts to work happening inside an agentic sandbox.
   Pairs with <code>SANDBOX-ARCHITECTURE.md</code> (what runs where) and <code>SANDBOX-ORCHESTRATION.md</code> (live transport).
-  <br><span class="small">Draft 2026-06-18 — design discussion converged; schemas not yet final.</span>
+  <br><span class="small">Revision 2 (2026-06-19) — incorporates corrections from late-session design discussion: sparse checkout v1, no host-side POSIX enforcement, required_paths + read_exclusions, repo_kind, Hermes egress, topology-driven resolution, test mounts. Supersedes Revision 1 (2026-06-18).</span>
 </div>
 
 <h2 id="overview">Overview</h2>
 <p>
   The agentic sandbox accepts a <strong>plan</strong> from AIDevOps, executes it under bounded permissions, and reports
-  <strong>status</strong> and <strong>events</strong> back to AIDevOps continuously. AIDevOps can <strong>intervene</strong>
-  (pause, cancel, answer the agent's questions); the sandbox can <strong>request</strong> (credentials, decisions, operator input).
-  When the agent finishes, the sandbox emits a completion event with a manifest; AIDevOps then drives the next workflow step
-  (testing, review, merge).
+  <strong>status</strong> and <strong>events</strong> back continuously. AIDevOps can <strong>intervene</strong>
+  (pause, cancel, answer the agent's questions); the sandbox can <strong>request</strong>
+  (credentials, decisions, operator input). When the agent finishes, the sandbox emits a completion event with a manifest;
+  AIDevOps then drives the next workflow step (testing, review, merge).
 </p>
 
 <div class="callout">
-  <strong>Key design choice:</strong> AIDevOps never talks to the agent directly. It talks to <strong>Hermes</strong>, which runs
-  inside the sandbox image alongside the agent. Hermes is the content layer (LLM routing, classification, audit) AND the control-plane
-  endpoint (status, events, intervention). The agent talks to Hermes locally; Hermes is the only thing crossing the container boundary.
+  <strong>Key design choices:</strong>
+  <ul>
+    <li>AIDevOps never talks to the agent directly. It talks to <strong>Hermes</strong> in-container.</li>
+    <li>Two container mounts: a <code>/workspace</code> mount with <strong>sparse checkout</strong> for visibility plus <strong>ro/rw overlays</strong> for write scope; and a Hermes-only <code>/control</code> mount for plan-in and status-out.</li>
+    <li><strong>Mount surface is the real restriction.</strong> Host-side POSIX permissions do not translate through Colima virtiofs to in-container enforcement and are not a defense layer.</li>
+    <li>Plan declares <code>repo_kind</code> (new vs existing) and <code>required_paths</code> (rw narrow) plus <code>read_exclusions</code> (broad ro by default for existing repos, with secrets carved out).</li>
+    <li>Hermes mediates all LLM egress and applies classification policy, which is what makes broad read scope safe in the existing-repo case.</li>
+  </ul>
 </div>
 
 <h2 id="layering">Layering</h2>
 
 <pre class="mermaid">
 flowchart LR
-  subgraph AIDEV["AIDevOps Platform (host process)"]
+  subgraph AIDEV["AIDevOps platform"]
     UI[Operator UI]
     WE[Workflow Engine]
-    API[POST /api/agentic-sandboxes]
-    POLL[Worktree poller / MCP client]
+    API[POST agentic-sandboxes API]
+    POLL[Worktree poller or MCP client]
     UI --- WE --- API
     WE --- POLL
   end
 
   subgraph HOST["Host filesystem"]
-    PLAN[/control/plan/*.json,.md/]
-    STATUS[/control/status.json/]
-    EVENTS[/control/events.jsonl/]
-    INBOX[/control/inbox//]
-    OUTBOX[/control/outbox//]
-    WT[/workspace = worktree/]
+    PLAN[/control plan files/]
+    STATUS[/control status.json/]
+    EVENTS[/control events.jsonl/]
+    INBOX[/control inbox/]
+    OUTBOX[/control outbox/]
+    WT[/workspace sparse worktree/]
   end
 
   subgraph CONT["lcm-hermes-agent container"]
     direction TB
     HERMES["Hermes
-      (control endpoint
-       + LLM router
-       + audit
-       + policy)"]
+      control endpoint
+      LLM router
+      classification
+      audit"]
     AGENT["Agent
-      (Claude Code in
-       bypassPermissions)"]
+      Claude Code
+      bypassPermissions"]
     AGENT -- local HTTP --> HERMES
   end
 
-  API -- writes plan, launches container --> PLAN
+  API -- writes plan and launches --> PLAN
   PLAN -- mounted ro --> HERMES
   HERMES -- writes status --> STATUS
   HERMES -- appends events --> EVENTS
@@ -170,260 +175,297 @@ flowchart LR
   POLL -- tails --> EVENTS
   POLL -- drops messages --> INBOX
   POLL -- reads --> OUTBOX
-  AGENT -- reads/writes --> WT
-  WT -- mounted rw + ACL --> AGENT
+  AGENT -- reads and writes --> WT
+  WT -- mounted with overlays --> AGENT
 </pre>
 
-<h2 id="mounts">Mounts &amp; files</h2>
+<h2 id="enforcement">Enforcement layers</h2>
 <p>
-  The container has two bind mounts. Keeping them separate makes the security boundary explicit and lets the audit substrate
-  outlive the worktree.
+  Three real enforcement layers plus one audit layer. Each does something different; security relies on stacking them.
 </p>
+
+<table>
+  <thead><tr><th>Layer</th><th>What enforces</th><th>Where</th><th>Bypass surface</th></tr></thead>
+  <tbody>
+    <tr><td>1. Mount visibility</td><td>Sparse checkout on host + selected bind mounts: paths not declared are physically absent from the container</td><td>Host worktree + Docker mount list</td><td>Container escape (very hard)</td></tr>
+    <tr><td>2. Docker bind mount mode</td><td>Linux kernel VFS rejects writes on <code>:ro</code> mounts; allows on <code>:rw</code></td><td>Lima VM kernel</td><td>Container escape</td></tr>
+    <tr><td>3. Hermes application-layer refusal</td><td>Hermes refuses agent tool calls outside declared paths and logs each refusal</td><td>In-container, mediates tool invocations</td><td>Agent invokes filesystem syscalls directly without going through Hermes</td></tr>
+    <tr><td>4. Container hardening</td><td>aiagent UID, <code>--cap-drop=ALL</code>, <code>--no-new-privileges</code>, <code>--read-only</code> root, <code>noexec</code> tmpfs</td><td>VM kernel and Docker</td><td>Kernel CVE or container escape</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <strong>Host-side POSIX is NOT a defense layer on this stack.</strong>
+  Verified empirically on macOS + Colima 2026-06-19: <code>chmod</code> and <code>chown</code> applied on the host do not translate through virtiofs to in-container enforcement. The aiagent user reads and writes regardless of host-side mode bits. Any earlier reference to POSIX as defense-in-depth was incorrect and has been removed from this design.
+</div>
+
+<h2 id="mounts">Mounts and files</h2>
 
 <table>
   <thead><tr><th>Mount</th><th>Host path</th><th>Container path</th><th>Mode</th><th>Owner</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td>Workspace</td><td><code>~/.sandbox-worktrees/sandbox-&lt;id&gt;-&lt;ts&gt;/</code></td><td><code>/workspace</code></td><td>rw + ACL</td><td>agent</td><td>The code the agent works on. Commits land here. ACL restricts writes to <code>allowed_paths</code>.</td></tr>
-    <tr><td>Control</td><td><code>~/.lcm-sandbox/runs/&lt;sandbox-id&gt;/</code></td><td><code>/control</code></td><td>rw</td><td>Hermes only</td><td>Plan delivery in, status/events out, inbox/outbox for bidirectional control.</td></tr>
+    <tr><td>Workspace base</td><td><code>~/.sandbox-worktrees/sandbox-&lt;id&gt;-&lt;ts&gt;/</code></td><td><code>/workspace</code></td><td><code>:ro</code></td><td>aiagent (read)</td><td>Sparse-checked-out worktree. Everything visible is readable; nothing is writable at this layer.</td></tr>
+    <tr><td>Workspace rw overlays</td><td><code>~/.sandbox-worktrees/&lt;id&gt;/&lt;rw-path&gt;</code> (one per declared rw path)</td><td><code>/workspace/&lt;rw-path&gt;</code></td><td><code>:rw</code></td><td>aiagent (read+write)</td><td>Narrow writable subpaths declared in plan <code>required_paths.rw</code>. Overlay each on top of the base ro mount.</td></tr>
+    <tr><td>Control</td><td><code>~/.lcm-sandbox/runs/&lt;sandbox-id&gt;/</code></td><td><code>/control</code></td><td><code>:rw</code></td><td>Hermes only</td><td>Plan delivery in, status and events out, inbox and outbox for bidirectional control.</td></tr>
   </tbody>
 </table>
 
 <h3>Layout of <code>/control</code></h3>
 <pre class="code">/control/
 ├── plan/
-│   ├── plan.json         ← structured plan (delivered by AIDevOps before launch)
-│   ├── plan.md           ← human-readable plan body (referenced by plan.json)
-│   └── inputs/           ← any files the plan needs (test fixtures, configs, …)
-├── status.json           ← Hermes writes continuously: current phase, step, heartbeat
-├── events.jsonl          ← append-only audit log of every notable event
-├── inbox/                ← AIDevOps drops messages here for Hermes to consume
+│   ├── plan.json
+│   ├── plan.md
+│   └── inputs/
+├── status.json           Hermes writes continuously
+├── events.jsonl          append-only audit log
+├── inbox/                AIDevOps drops messages here
 │   └── &lt;msg-id&gt;.json
-├── outbox/               ← Hermes drops messages here for AIDevOps to pick up
+├── outbox/               Hermes drops messages here
 │   └── &lt;msg-id&gt;.json
 └── hermes/
-    ├── llm-calls.jsonl   ← per-call audit (model, classification, tokens)
-    └── policy-log.jsonl  ← policy decisions (allowed, denied, transformed)
+    ├── llm-calls.jsonl   per-call audit (model, classification, tokens)
+    └── policy-log.jsonl  policy decisions (allowed, denied, transformed)
+</pre>
+
+<h2 id="worktree">Worktree lifecycle and mount selection</h2>
+
+<h3>Creation</h3>
+<p>
+  The worktree is created by <code>lcm-sandbox</code> Phase 1 (<code>lcm_sandbox/core/worktree.py</code>) after AIDevOps writes the plan to <code>/control/plan/</code> and before docker launch. It is pinned to the <code>source_revision</code> the plan declares, so the agent works on a frozen snapshot regardless of what the developer has uncommitted in the parent repo.
+</p>
+
+<h3>Sparse checkout for visibility (v1)</h3>
+<p>
+  After <code>git worktree add</code>, Phase 1 applies <code>git sparse-checkout</code> using the declared read scope minus read exclusions. Paths outside the resulting set are <strong>not physically present</strong> in the worktree directory. The agent cannot read them, even via prompt injection or tool misuse, because they do not exist in the filesystem the container sees.
+</p>
+
+<pre class="code"># inside the new worktree, before docker run
+git sparse-checkout init --cone
+git sparse-checkout set &lt;declared read paths minus exclusions&gt;
+</pre>
+
+<h3>Mount overlay model</h3>
+<p>
+  The whole sparse-checked-out worktree is bind-mounted at <code>/workspace</code> as <code>:ro</code>.
+  Each rw subpath declared by the plan is then mounted on top as <code>:rw</code>:
+</p>
+
+<pre class="code">docker run \
+  -v &lt;worktree&gt;:/workspace:ro \
+  -v &lt;worktree&gt;/src/parser:/workspace/src/parser:rw \
+  -v &lt;worktree&gt;/tests/parser:/workspace/tests/parser:rw \
+  -v &lt;control&gt;:/control:rw \
+  ...
 </pre>
 
 <div class="callout warn">
-  <strong>Why two mounts, not one?</strong> The worktree is the <em>work surface</em> — anything written there is reviewable and
-  potentially commits to the repo. Control state (plan, status, events, operator messages) shouldn't pollute commits and shouldn't
-  share the worktree's lifecycle. Keeping them separate also lets AIDevOps read live control state without walking the worktree.
+  <strong>Verify overlay behavior on Colima before relying on it.</strong>
+  Docker bind mount overlapping is supposed to shadow per-subtree. The mount enforcement test plan below includes an explicit test (T1 and T2) for this on Colima. Fallback if overlaps misbehave: enumerate every directory and file individually as <code>:ro</code> or <code>:rw</code>.
 </div>
 
-<h2 id="worktree">Worktree lifecycle &amp; mount selection</h2>
-
-<h3>When the worktree is created, by whom, pinned to what</h3>
-<p>
-  The worktree is created by <code>lcm-sandbox</code> Phase 1 (<code>lcm_sandbox/core/worktree.py</code>), <strong>after</strong>
-  AIDevOps writes the plan to the host control directory and <strong>before</strong> docker launch. It is pinned to the
-  <code>source_revision</code> the plan declares — typically the commit the plan was approved against, not <code>HEAD</code>
-  of the parent repo. This means the agent works on a frozen snapshot, regardless of what the developer is currently editing
-  in the parent repo.
-</p>
-
-<table>
-  <thead><tr><th>Aspect</th><th>Value</th></tr></thead>
-  <tbody>
-    <tr><td>Created by</td><td><code>lcm-sandbox</code> CLI Phase 1 (called by AIDevOps API)</td></tr>
-    <tr><td>Source repo</td><td>Parent repo declared in <code>plan.context.repo</code></td></tr>
-    <tr><td>Pinned revision</td><td><code>plan.context.source_revision</code> — explicit, never floating</td></tr>
-    <tr><td>Location on host</td><td><code>~/.sandbox-worktrees/sandbox-&lt;sandbox-id&gt;-&lt;timestamp&gt;/</code></td></tr>
-    <tr><td>Created when</td><td>Between control-dir setup and docker run; fails launch if creation fails</td></tr>
-    <tr><td>Survives container restart</td><td>Yes — it lives on the host filesystem, independent of the container</td></tr>
-    <tr><td>Removed when</td><td>Phase 3 cleanup, after artifacts are captured to <code>~/.lcm-sandbox/artifacts/&lt;sandbox-id&gt;/</code></td></tr>
-    <tr><td>Sync policy</td><td>Phase 2 rebases onto upstream if behind; aborts if ahead/diverged from declared base branch</td></tr>
-  </tbody>
-</table>
-
-<h3>Pre-launch sequence on the host</h3>
+<h3>Pre-launch sequence</h3>
 
 <pre class="mermaid">
 flowchart TD
-  A[AIDevOps API receives create request] --> B[Validate plan and source_revision]
-  B --> C[mkdir runs sandbox-id and write plan.json plan.md inputs]
-  C --> D[Phase 1: git worktree add at source_revision]
-  D --> E{Worktree clean?}
-  E -- yes --> F[Phase 2: rebase onto base if behind]
-  E -- no --> X1[Abort: worktree dirty]
-  F --> G{Sync result}
-  G -- ahead or diverged --> X2[Abort: plan source_revision stale]
-  G -- behind or up-to-date --> H[Phase 3: docker image present?]
-  H -- no --> I[Build image]
-  H -- yes --> J[Docker run with two mounts and ACL]
-  I --> J
-  J --> K[Hermes starts and reads plan]
-  K --> L[Agent invoked]
+  A[AIDevOps API receives create] --> B[Validate plan and source_revision]
+  B --> C[mkdir runs sandbox-id and write plan files]
+  C --> D[Phase 1 git worktree add at source_revision]
+  D --> E{Worktree clean}
+  E -- yes --> F[Phase 1b git sparse-checkout per read scope]
+  E -- no --> X1[Abort worktree dirty]
+  F --> G[Phase 2 rebase if behind base branch]
+  G --> H{Sync result}
+  H -- ahead or diverged --> X2[Abort plan source_revision stale]
+  H -- ok --> I[Phase 3 image present check]
+  I -- missing --> J[Build image]
+  I -- present --> K[Phase 4 docker run with overlay mounts]
+  J --> K
+  K --> L[Hermes starts and reads plan]
+  L --> M[Agent invoked]
 
   style X1 fill:#7f1d1d,stroke:#ef4444,color:#fef2f2
   style X2 fill:#7f1d1d,stroke:#ef4444,color:#fef2f2
 </pre>
 
-<h3>What from the worktree is exposed in the container, and who decides</h3>
+<h2 id="repo-kind">Repo kind: new vs existing</h2>
 <p>
-  In <strong>v1</strong>, the whole worktree directory is bind-mounted at <code>/workspace</code>. Selectivity is enforced not by
-  the mount but by an <strong>access-control list applied inside the container</strong>, declared by the plan:
+  The plan declares <code>repo_kind</code>. The two cases have fundamentally different threat models and different mount defaults.
 </p>
 
-<pre class="code">// plan.json (excerpt)
-"context": {
-  "repo":             "/workspace",
-  "branch":           "feature/auto-todo-88",
-  "source_revision":  "abc123def",
-  "allowed_paths": {
-    "write": ["src/", "tests/"],
-    "read":  ["*"]
-  }
-}
-</pre>
-
 <table>
-  <thead><tr><th>Declaration</th><th>Effect in v1</th><th>Where enforced</th></tr></thead>
+  <thead><tr><th>Field</th><th><code>repo_kind: new</code></th><th><code>repo_kind: existing</code></th></tr></thead>
   <tbody>
-    <tr><td><code>allowed_paths.write</code></td><td>Agent can only modify files under these paths in <code>/workspace</code>. Writes elsewhere fail with EACCES.</td><td>ACL applied at container start by <code>apply_agent_profile</code> on the container's <code>aiagent</code> user; Hermes also enforces at the application layer (refuses write-tool calls outside this set).</td></tr>
-    <tr><td><code>allowed_paths.read</code></td><td>Informational in v1 — agent can read anything under <code>/workspace</code> (whole worktree mounted).</td><td>Not enforced as restriction; future Phase 2 hardening (TODO #107 in LCM-Sandbox) would apply <code>git sparse-checkout</code> to the worktree so only declared read paths are even visible.</td></tr>
-    <tr><td>Anything outside <code>/workspace</code></td><td>Invisible to the agent (e.g., the parent repo, other worktrees, the user's home).</td><td>Container isolation; the worktree is the only repo content mounted.</td></tr>
-    <tr><td><code>/control/plan/</code></td><td>Plan files visible to Hermes only; the agent reaches them via Hermes' local HTTP endpoint.</td><td>Hermes-only mount path; agent has no <code>/control</code> mount.</td></tr>
+    <tr><td>Threat model</td><td>Nothing to break yet; agent has latitude</td><td>Functional code present; must not break what is outside declared scope</td></tr>
+    <tr><td>Default <code>required_paths.rw</code></td><td>Project root (or empty if not relevant)</td><td>Narrow declared scope only, derived from plan intent</td></tr>
+    <tr><td>Implicit read scope</td><td>Whole worktree minus exclusions</td><td>Whole worktree minus exclusions (broad read for context)</td></tr>
+    <tr><td>Sparse checkout pattern</td><td>Include everything except <code>read_exclusions</code></td><td>Include everything except <code>read_exclusions</code></td></tr>
+    <tr><td>Hermes non-regression instruction</td><td>Inactive</td><td>Active. Agent is told do not break existing functionality outside declared scope; escalate via <code>ask</code> if scope insufficient.</td></tr>
+    <tr><td>Typical <code>exit_criteria</code></td><td>Tests pass, build passes</td><td>Tests pass, build passes, plus non-regression command verifies untouched code paths still behave</td></tr>
+    <tr><td>Failure mode if scope creeps</td><td>Less critical</td><td>Hermes refuses tool calls outside scope; agent must escalate</td></tr>
   </tbody>
 </table>
 
-<h3>Decision flow for what gets mounted</h3>
-
-<pre class="mermaid">
-flowchart LR
-  A[Plan author<br/>e.g. AIDevOps operator] --> B[Declares allowed_paths<br/>in plan.json]
-  B --> C{Plan validation<br/>by API}
-  C -- ok --> D[Worktree created at source_revision]
-  D --> E[Whole worktree bind-mounted at /workspace]
-  E --> F[allowed_paths.write applied as ACL]
-  F --> G[Container runs with ACL active]
-
-  C -- rejected --> X[400: allowed_paths invalid or outside repo]
-  style X fill:#7f1d1d,stroke:#ef4444,color:#fef2f2
-</pre>
-
-<div class="callout warn">
-  <strong>Why mount the whole worktree even with restrictive writes?</strong> Because the agent often needs to <em>read</em> code
-  outside its write scope to understand context (e.g., touching <code>src/</code> while reading <code>lib/</code> for type signatures).
-  Restricting reads via sparse checkout (TODO #107 in LCM-Sandbox) is a hardening pass for cases where threat model requires it —
-  e.g., the plan covers third-party code the agent should not be able to exfiltrate. Not v1.
-</div>
-
-<h3>Future option: bind individual subdirectories instead of the whole worktree</h3>
+<h3>Why broad read is safe in the existing-repo case</h3>
 <p>
-  Some scenarios may want to mount only specific worktree subdirectories at named container paths — e.g., mount
-  <code>worktree/services/api/</code> at <code>/workspace</code> and <code>worktree/libs/shared/</code> at <code>/aux</code>. This is
-  <strong>not v1</strong>; the simpler "whole worktree at <code>/workspace</code> + ACL" model handles the current use cases.
-  If this becomes necessary, the plan would declare named mount-mappings instead of (or alongside) <code>allowed_paths</code>,
-  and <code>docker_launcher.py</code> would assemble <code>-v</code> flags accordingly. Track as a deferred enhancement.
+  Restricting reads would make the agent <em>more</em> likely to break things, not less, because the agent cannot understand context it cannot see (types, callers, sibling modules, conventions). Broad read is correct for the existing-repo case.
+</p>
+<p>
+  The exfiltration risk that broad read raises is mitigated by <strong>Hermes egress classification</strong>: every LLM call passes through Hermes, which applies the data classification policy (see <code>aidevops/design/LLM-DATA-CLASSIFICATION-POLICY.md</code>) on outbound payloads. Sensitive content (PII, secrets, credentials, tokens, customer data) is blocked, redacted, or requires operator approval before egress.
+</p>
+<p>
+  This is a layered defense:
+</p>
+<ul>
+  <li><strong>Layer 1</strong> — <code>read_exclusions</code> in the plan: the agent never sees secrets at all (they are not in the sparse-checked-out worktree).</li>
+  <li><strong>Layer 2</strong> — Hermes classification: anything that slipped in or appears intentionally in source code is gated at the egress point.</li>
+</ul>
+
+<h2 id="topology">Topology-driven mount resolution</h2>
+<p>
+  The plan does not have to enumerate every concrete path. Instead, it can reference <strong>logical scope</strong> (modules, include tests, include docs); the launcher reads the target repo's <code>docs/REPO-TOPOLOGY.md</code> and resolves logical scope to concrete <code>required_paths</code> deterministically.
 </p>
 
-<h2 id="flow-launch">Flow 1 — Launch from AIDevOps with a plan</h2>
+<pre class="code"># plan.json fragment with logical scope
+"scope": {
+  "modules":       ["parser"],
+  "include_tests": true,
+  "include_docs":  false
+},
+"read_exclusions_inherit": ["conventions.secrets_locations", "conventions.vendored"]
+</pre>
+
+<p>
+  Given the repo's topology:
+</p>
+
+<pre class="code"># target repo docs/REPO-TOPOLOGY.md fragment
+modules:
+  parser:
+    code:  src/parser/
+    tests: tests/parser/
+
+commands:
+  test: pnpm test
+
+conventions:
+  secrets_locations: [".env*", "secrets/"]
+  vendored:          ["node_modules/", "vendor/"]
+</pre>
+
+<p>The launcher derives:</p>
+<pre class="code">required_paths:
+  rw:   [src/parser/, tests/parser/]
+exit_criteria:
+  - {type: command, value: "pnpm test"}
+read_exclusions:
+  - .env*
+  - secrets/
+  - node_modules/
+  - vendor/
+</pre>
+
+<p>
+  The operator reviews the derived mount plan in the AIDevOps UI before approval and can edit anything. The derivation is traceable: every mount line points back to the topology field that produced it.
+</p>
+
+<h3>Discovery from inside the sandbox</h3>
+<p>
+  The agent does not grep around to find where things live. It asks Hermes:
+</p>
+
+<pre class="code">GET http://localhost:8765/v1/topology
+→ {full resolved topology}
+
+GET http://localhost:8765/v1/topology/module/parser
+→ {code: "/workspace/src/parser/", tests: "/workspace/tests/parser/"}
+
+GET http://localhost:8765/v1/topology/commands
+→ {test: "pnpm test", lint: "pnpm lint"}
+</pre>
+
+<h2 id="flows">Flows</h2>
+
+<h3>Flow 1 — Launch from AIDevOps with a plan</h3>
 
 <pre class="mermaid">
 sequenceDiagram
-  participant Op as Operator (UI)
-  participant WE as AIDevOps Workflow Engine
-  participant API as POST /api/agentic-sandboxes
-  participant FS as Host filesystem
-  participant LCM as lcm-sandbox CLI
-  participant CONT as Container (Hermes + Agent)
+  participant Op as Operator
+  participant WE as WorkflowEngine
+  participant API as API
+  participant FS as HostFS
+  participant LCM as LCMCLI
+  participant CONT as Container
 
   Op->>WE: Approve plan PT-88 for execution
-  WE->>API: create({plan_id, run_id, repo, branch, allowed_paths, exit_criteria})
-  API->>FS: mkdir ~/.lcm-sandbox/runs/&lt;id&gt;/
-  API->>FS: write plan.json, plan.md, inputs/
-  API->>LCM: lcm-sandbox create --run-id ... --plan-dir /control/plan
-  LCM->>FS: git worktree add ~/.sandbox-worktrees/sandbox-&lt;id&gt;-&lt;ts&gt;
-  LCM->>LCM: docker check / build if missing
-  LCM->>CONT: docker run -v workspace -v control --label ...
-  CONT->>CONT: Hermes starts, reads /control/plan/plan.json
-  CONT->>FS: status.json = {phase: starting, ts: ...}
-  CONT->>FS: events.jsonl += {type: launched}
-  CONT->>CONT: Hermes invokes agent with plan summary + local HTTP endpoint URL
-  CONT->>FS: status.json = {phase: executing, step: 1/N}
-  CONT->>FS: events.jsonl += {type: step_started, step: 1}
-  Note over WE,CONT: AIDevOps tails status.json and events.jsonl from host
+  WE->>API: create with plan metadata
+  API->>FS: mkdir runs sandbox-id
+  API->>FS: write plan.json plan.md inputs
+  API->>LCM: lcm-sandbox create with run-id
+  LCM->>FS: git worktree add at source_revision
+  LCM->>FS: git sparse-checkout per read scope
+  LCM->>LCM: docker check or build if missing
+  LCM->>CONT: docker run with overlay mounts and labels
+  CONT->>CONT: Hermes starts and reads plan
+  CONT->>FS: write starting status
+  CONT->>FS: append launched event
+  CONT->>CONT: invoke agent with plan summary and local URL
+  CONT->>FS: update status to executing step one
+  Note over WE,CONT: AIDevOps tails status and events from host
 </pre>
 
-<h3>What the agent receives</h3>
-<p>
-  The agent does <em>not</em> read <code>plan.json</code> directly. It calls a local Hermes endpoint:
-</p>
-<pre class="code">GET http://localhost:8765/v1/plan
-→ {
-  "title": "Implement TODO #88",
-  "instructions": "&lt;rendered markdown&gt;",
-  "exit_criteria": [...],
-  "permitted_actions": ["read", "write within allowed_paths", "commit", "run tests"],
-  "ask_operator_endpoint": "POST http://localhost:8765/v1/ask"
-}
-</pre>
-<p>
-  This uniform interface means the agent behaves identically whether the plan came from AIDevOps, a CLI test run, or a future
-  trigger source. Hermes also redacts anything the agent shouldn't see (operator credentials, internal IDs).
-</p>
-
-<h2 id="flow-status">Flow 2 — Continuous status &amp; events</h2>
-
-<pre class="mermaid">
-sequenceDiagram
-  participant AGENT as Agent
-  participant HERMES as Hermes (in container)
-  participant FS as /control on host
-  participant POLL as AIDevOps poller
-  participant UI as Operator UI
-
-  loop For each meaningful action
-    AGENT->>HERMES: notify({type: file_edited, path: src/foo.ts})
-    HERMES->>HERMES: classify, audit
-    HERMES->>FS: events.jsonl += {ts, type, payload, seq}
-    HERMES->>FS: status.json = {phase, step, last_action, heartbeat}
-  end
-
-  loop Polling (every N seconds, or MCP push when live)
-    POLL->>FS: read status.json + tail events.jsonl
-    POLL->>UI: stream updates
-  end
-</pre>
-
-<div class="callout">
-  <strong>Heartbeat:</strong> Hermes updates <code>status.json.heartbeat</code> at least every 10s even if the agent is silent.
-  If AIDevOps sees no heartbeat for 60s it marks the run <code>stalled</code> and surfaces it. This catches hung agents and dead containers.
-</div>
-
-<h2 id="flow-blocked">Flow 3 — Agent blocked, needs operator input</h2>
+<h3>Flow 2 — Continuous status and events</h3>
 
 <pre class="mermaid">
 sequenceDiagram
   participant AGENT as Agent
   participant HERMES as Hermes
-  participant FS as /control on host
-  participant POLL as AIDevOps poller
-  participant OP as Operator (UI)
+  participant FS as ControlDir
+  participant POLL as Poller
+  participant UI as UI
 
-  AGENT->>HERMES: POST /v1/ask {question, options, context}
-  HERMES->>FS: outbox/&lt;msg-id&gt;.json = {type: ask, question, options, context}
-  HERMES->>FS: status.json.blocked_on = &lt;msg-id&gt;
-  HERMES->>FS: events.jsonl += {type: blocked, msg_id}
+  loop For each meaningful action
+    AGENT->>HERMES: notify with type and payload
+    HERMES->>HERMES: classify and audit
+    HERMES->>FS: append event to events log
+    HERMES->>FS: update status with phase step and heartbeat
+  end
+
+  loop Poll or MCP push
+    POLL->>FS: read status and tail events
+    POLL->>UI: stream updates
+  end
+</pre>
+
+<div class="callout">
+  <strong>Heartbeat:</strong> Hermes updates the status heartbeat at least every 10 seconds even if the agent is silent. If AIDevOps sees no heartbeat for 60 seconds it marks the run stalled.
+</div>
+
+<h3>Flow 3 — Agent blocked, needs operator input</h3>
+
+<pre class="mermaid">
+sequenceDiagram
+  participant AGENT as Agent
+  participant HERMES as Hermes
+  participant FS as ControlDir
+  participant POLL as Poller
+  participant OP as Operator
+
+  AGENT->>HERMES: POST ask with question options and context
+  HERMES->>FS: write outbox message
+  HERMES->>FS: set status blocked_on msg id
+  HERMES->>FS: append blocked event
   POLL->>FS: read outbox
   POLL->>OP: surface question in UI
   OP->>POLL: select answer
-  POLL->>FS: inbox/&lt;msg-id&gt;.json = {type: answer, value}
-  HERMES->>FS: read inbox/&lt;msg-id&gt;.json
-  HERMES->>FS: status.json.blocked_on = null
-  HERMES->>FS: events.jsonl += {type: unblocked, msg_id, answer}
-  HERMES->>AGENT: 200 {answer}
+  POLL->>FS: write inbox response
+  HERMES->>FS: read inbox response
+  HERMES->>FS: clear status blocked_on
+  HERMES->>FS: append unblocked event
+  HERMES->>AGENT: 200 with answer
   AGENT->>AGENT: continue execution
 </pre>
 
-<p>
-  The agent's <code>POST /v1/ask</code> call blocks until Hermes resolves it. Timeout is configurable per plan. If the operator
-  doesn't answer within the timeout, Hermes returns an error to the agent which can then emit a <code>failed: timed_out_on_input</code>
-  event and exit cleanly.
-</p>
-
-<h2 id="flow-complete">Flow 4 — Completion → downstream workflow trigger</h2>
+<h3>Flow 4 — Completion and downstream workflow handoff</h3>
 
 <pre class="mermaid">
 sequenceDiagram
@@ -448,95 +490,99 @@ sequenceDiagram
     WE->>WE: advance to review or merge step
   else tests fail
     WE->>WE: respawn agentic sandbox with follow up plan
-    Note over WE: follow up plan carries the failing test output
+    Note over WE: follow up plan carries failing test output
   end
 </pre>
 
 <div class="callout ok">
-  <strong>Separation of concerns:</strong> the agentic sandbox knows how to do <em>one plan</em>. It does not know about
-  testing, review, or merge. Those are workflow-engine concerns. The plan declares its <code>exit_criteria</code>;
-  the workflow engine verifies them and drives the next step.
+  <strong>Separation of concerns:</strong> the agentic sandbox knows how to do one plan. Testing, review, and merging are workflow-engine concerns. The plan declares its <code>exit_criteria</code>; the workflow engine verifies them and drives the next step.
 </div>
 
-<h2 id="flow-fail">Flow 5 — Failure</h2>
+<h3>Flow 5 — Failure</h3>
 
 <pre class="mermaid">
 sequenceDiagram
   participant AGENT as Agent
   participant HERMES as Hermes
-  participant FS as /control on host
-  participant POLL as AIDevOps poller
-  participant WE as AIDevOps Workflow Engine
+  participant FS as ControlDir
+  participant POLL as Poller
+  participant WE as WorkflowEngine
 
   alt Agent reports failure
-    AGENT->>HERMES: notify({type: failed, reason, error, partial_progress})
-    HERMES->>FS: events.jsonl += {type: failed, reason, error}
-    HERMES->>FS: status.json = {phase: failed, reason}
-  else Container dies unexpectedly
-    Note over HERMES,FS: status.json heartbeat stops updating
-    POLL->>POLL: detect heartbeat &gt; 60s old
-    POLL->>WE: emit RunStalled event
+    AGENT->>HERMES: notify failed with reason and partial progress
+    HERMES->>FS: append failed event
+    HERMES->>FS: update status to failed
+  else Container dies
+    Note over HERMES,FS: heartbeat stops updating
+    POLL->>POLL: detect heartbeat older than 60s
+    POLL->>WE: emit RunStalled
   else Hermes itself crashes
-    Note over HERMES,FS: no new writes to status.json or events.jsonl
-    POLL->>POLL: detect heartbeat &gt; 60s old
-    POLL->>WE: emit RunStalled event
+    Note over HERMES,FS: no new writes
+    POLL->>POLL: detect heartbeat older than 60s
+    POLL->>WE: emit RunStalled
   end
 
   WE->>WE: workflow definition specifies failure action
-  Note over WE: e.g. notify operator, archive artifacts,<br/>spawn diagnosis sandbox, retry with adjusted plan
+  Note over WE: e.g. notify operator archive artifacts spawn diagnosis sandbox
 </pre>
 
-<p>
-  The audit substrate (worktree + <code>/control</code> on host) survives container death, so an operator can always go inspect
-  what the agent did and what state it reached before failing.
-</p>
-
-<h2 id="transport">Transport — Phase A (now) and Phase B (Phase 5)</h2>
+<h2 id="transport">Transport — Phase A now and Phase B for Phase 5</h2>
 
 <table>
   <thead><tr><th>Aspect</th><th>Phase A — Worktree files</th><th>Phase B — MCP Streamable HTTP</th></tr></thead>
   <tbody>
-    <tr><td>Status</td><td><code>status.json</code> on host filesystem, polled</td><td>Streamed over MCP session to AIDevOps</td></tr>
-    <tr><td>Events</td><td><code>events.jsonl</code> tailed by AIDevOps</td><td>Streamed over MCP session</td></tr>
-    <tr><td>AIDevOps → Hermes</td><td><code>inbox/</code> directory drop</td><td>MCP tool call (request/response)</td></tr>
-    <tr><td>Hermes → AIDevOps</td><td><code>outbox/</code> directory drop</td><td>MCP server-side message</td></tr>
-    <tr><td>Auth</td><td>Filesystem ACL (per-user runs directory)</td><td>OAuth 2.1 per-run token</td></tr>
-    <tr><td>Latency</td><td>Polling interval (default 2s)</td><td>Live (sub-second)</td></tr>
-    <tr><td>Survives container crash</td><td>Yes — files persist on host</td><td>Stream drops; reconnect resumes from last <code>seq</code></tr>
-    <tr><td>Ships</td><td>With Phase 5 v1 (no upstream blocker)</td><td>Blocked on GH <code>claude-code</code> #28293 + #36665</td></tr>
+    <tr><td>Status</td><td><code>status.json</code> polled from host</td><td>Streamed over MCP session</td></tr>
+    <tr><td>Events</td><td><code>events.jsonl</code> tailed</td><td>Streamed over MCP session</td></tr>
+    <tr><td>AIDevOps to Hermes</td><td><code>inbox/</code> directory drop</td><td>MCP tool call</td></tr>
+    <tr><td>Hermes to AIDevOps</td><td><code>outbox/</code> directory drop</td><td>MCP server-side message</td></tr>
+    <tr><td>Auth</td><td>Filesystem permissions on per-user runs dir</td><td>OAuth 2.1 per-run token</td></tr>
+    <tr><td>Latency</td><td>Polling interval default 2s</td><td>Live, sub-second</td></tr>
+    <tr><td>Survives container crash</td><td>Yes, files persist on host</td><td>Stream drops; reconnect resumes from last seq</td></tr>
+    <tr><td>Ships</td><td>With Phase 5 v1; no upstream blocker</td><td>Blocked on GH claude-code 28293 and 36665</td></tr>
   </tbody>
 </table>
 
 <div class="callout ok">
-  <strong>Both phases write the same schemas.</strong> <code>status.json</code> and <code>events.jsonl</code> are written
-  by Hermes in both modes; in Phase B, MCP carries the same JSON shapes live. Consumers that learn Phase A schemas
-  do not break when Phase B lands. The schemas are the load-bearing contract.
+  <strong>Both phases write the same schemas.</strong> Hermes writes <code>status.json</code> and <code>events.jsonl</code> in both modes; in Phase B, MCP carries the same JSON shapes live. Consumers that learn Phase A schemas do not break when Phase B lands. The schemas are the load-bearing contract.
 </div>
 
-<h2 id="schema">Schemas (draft)</h2>
+<h2 id="schemas">Schemas (draft)</h2>
 
 <h3><code>plan.json</code></h3>
 <pre class="code">{
   "schema_version": "1",
   "plan_id": "plan_abc123",
-  "run_id": "run_def456",
-  "title": "Implement TODO #88",
+  "run_id":  "run_def456",
+  "title":   "Implement TODO 88",
+  "repo_kind": "existing",                          // or "new"
   "instructions_md_path": "/control/plan/plan.md",
   "context": {
-    "repo": "/workspace",
-    "branch": "feature/auto-todo-88",
-    "source_revision": "abc123def",
-    "allowed_paths": {"write": ["src/", "tests/"], "read": ["*"]}
+    "repo":            "/workspace",
+    "branch":          "feature/auto-todo-88",
+    "source_revision": "abc123def"
   },
+  "scope": {                                        // optional, topology-resolved
+    "modules":       ["parser"],
+    "include_tests": true,
+    "include_docs":  false
+  },
+  "required_paths": {                               // either explicit or topology-derived
+    "rw":   ["src/parser/", "tests/parser/"]
+  },
+  "read_exclusions": [                              // carved out of sparse checkout
+    ".env*", "secrets/", "credentials/",
+    "node_modules/", "vendor/",
+    "dist/", "build/"
+  ],
   "exit_criteria": [
-    {"type": "tests_pass",       "command": "npm test"},
-    {"type": "lint_pass",        "command": "npm run lint"},
+    {"type": "tests_pass",       "command": "pnpm test"},
+    {"type": "non_regression",   "command": "pnpm test:non-regression"},
     {"type": "commit_count_min", "value":   1}
   ],
   "checkpoint_policy": {
-    "on_blocked":                 "emit_event_and_wait",
-    "on_failure":                 "emit_event_and_exit",
-    "on_uncertain_destructive":   "ask_via_outbox"
+    "on_blocked":               "emit_event_and_wait",
+    "on_failure":               "emit_event_and_exit",
+    "on_uncertain_destructive": "ask_via_outbox"
   },
   "operator": {
     "user_id":          "libor@labguide.io",
@@ -549,95 +595,125 @@ sequenceDiagram
 <pre class="code">{
   "schema_version": "1",
   "run_id": "run_def456",
-  "phase": "executing",          // starting | executing | blocked | complete | failed | stalled
-  "current_step": "Add unit tests for parser",
-  "step_index": 3,
-  "step_total": 7,
-  "last_action_ts": "2026-06-18T14:23:01Z",
-  "heartbeat":      "2026-06-18T14:23:09Z",
-  "blocked_on":     null,        // msg_id when phase=blocked
-  "exit_code":      null,        // set when phase=complete | failed
-  "manifest": {                  // populated incrementally
+  "phase":  "executing",
+  "current_step":  "Add unit tests for parser",
+  "step_index":    3,
+  "step_total":    7,
+  "last_action_ts": "2026-06-19T14:23:01Z",
+  "heartbeat":      "2026-06-19T14:23:09Z",
+  "blocked_on":     null,
+  "exit_code":      null,
+  "manifest": {
     "commits":       ["a1b2c3d"],
     "files_changed": ["src/parser.ts", "tests/parser.spec.ts"]
   }
 }
 </pre>
 
-<h3><code>events.jsonl</code> (one JSON object per line)</h3>
-<pre class="code">{"seq":1, "ts":"2026-06-18T14:20:00Z", "type":"launched",     "payload":{}}
-{"seq":2, "ts":"2026-06-18T14:20:02Z", "type":"plan_loaded",   "payload":{"plan_id":"plan_abc123"}}
-{"seq":3, "ts":"2026-06-18T14:20:05Z", "type":"step_started",  "payload":{"step":1, "title":"Read existing parser"}}
-{"seq":4, "ts":"2026-06-18T14:21:30Z", "type":"file_edited",   "payload":{"path":"src/parser.ts", "lines_added":12, "lines_removed":3}}
-{"seq":5, "ts":"2026-06-18T14:22:00Z", "type":"commit",        "payload":{"sha":"a1b2c3d", "message":"refactor parser"}}
-{"seq":6, "ts":"2026-06-18T14:23:00Z", "type":"blocked",       "payload":{"msg_id":"m_001", "question":"Adopt strict mode?"}}
-{"seq":7, "ts":"2026-06-18T14:24:10Z", "type":"unblocked",     "payload":{"msg_id":"m_001", "answer":"yes"}}
-{"seq":8, "ts":"2026-06-18T14:30:00Z", "type":"tasks_complete","payload":{"exit_criteria_met":["tests_pass","lint_pass"]}}
+<h3><code>events.jsonl</code></h3>
+<pre class="code">{"seq":1,"ts":"...","type":"launched",      "payload":{}}
+{"seq":2,"ts":"...","type":"plan_loaded",   "payload":{"plan_id":"plan_abc123"}}
+{"seq":3,"ts":"...","type":"step_started",  "payload":{"step":1,"title":"Read parser"}}
+{"seq":4,"ts":"...","type":"file_edited",   "payload":{"path":"src/parser.ts","lines_added":12,"lines_removed":3}}
+{"seq":5,"ts":"...","type":"commit",        "payload":{"sha":"a1b2c3d","message":"refactor parser"}}
+{"seq":6,"ts":"...","type":"blocked",       "payload":{"msg_id":"m_001"}}
+{"seq":7,"ts":"...","type":"unblocked",     "payload":{"msg_id":"m_001","answer":"yes"}}
+{"seq":8,"ts":"...","type":"tasks_complete","payload":{"exit_criteria_met":["tests_pass","non_regression"]}}
 </pre>
 
-<h3><code>inbox/&lt;msg-id&gt;.json</code> &amp; <code>outbox/&lt;msg-id&gt;.json</code></h3>
-<pre class="code">// outbox (Hermes → AIDevOps)
+<h3>Inbox and outbox messages</h3>
+<pre class="code">// outbox (Hermes to AIDevOps)
 {
   "msg_id":   "m_001",
   "type":     "ask",
-  "ts":       "2026-06-18T14:23:00Z",
-  "question": "Should we adopt strict mode in tsconfig?",
+  "ts":       "2026-06-19T14:23:00Z",
+  "question": "Should we adopt strict mode in tsconfig",
   "options":  ["yes", "no", "only for new files"],
-  "context":  "Existing code has 14 type errors that would surface immediately."
+  "context":  "Existing code has 14 type errors that would surface"
 }
 
-// inbox (AIDevOps → Hermes, response keyed by same msg_id)
+// inbox (AIDevOps to Hermes)
 {
   "msg_id": "m_001",
   "type":   "answer",
-  "ts":     "2026-06-18T14:24:00Z",
+  "ts":     "2026-06-19T14:24:00Z",
   "value":  "yes",
   "actor":  "libor@labguide.io"
 }
 </pre>
+
+<h2 id="tests">Mount enforcement test plan</h2>
+<p>
+  Seven tests to verify the enforcement stack actually holds on macOS plus Colima before Phase 5 is considered ready. Each test produces a pass or fail signal recorded against a known plan fixture.
+</p>
+
+<table>
+  <thead><tr><th>ID</th><th>Test</th><th>Expected</th><th>Layer probed</th></tr></thead>
+  <tbody>
+    <tr><td>T1</td><td>Mount overlay: <code>:ro</code> base + <code>:rw</code> overlay; write to overlay subpath</td><td>Succeeds</td><td>Layer 2 mount mode</td></tr>
+    <tr><td>T2</td><td>Mount overlay: write to base path outside overlay</td><td>Fails with EROFS</td><td>Layer 2 mount mode</td></tr>
+    <tr><td>T3</td><td>Sparse checkout: list <code>/workspace/lib/</code> where <code>lib/</code> was excluded</td><td>No such directory</td><td>Layer 1 visibility</td></tr>
+    <tr><td>T4</td><td>Hermes refusal: agent invokes write tool against path inside worktree but NOT in <code>required_paths.rw</code></td><td>Hermes refuses, logs to events, returns error</td><td>Layer 3 application refusal</td></tr>
+    <tr><td>T5</td><td>Sudo and setuid: aiagent attempts <code>sudo</code></td><td>Command not found or permission denied</td><td>Layer 4 container hardening</td></tr>
+    <tr><td>T6</td><td>chmod attempt: aiagent attempts <code>chmod 777</code> on a <code>:ro</code> mount</td><td>Either chmod fails or write still fails because mount is read-only</td><td>Layer 2 mount mode</td></tr>
+    <tr><td>T7</td><td>Bind-remount escape: aiagent attempts <code>mount -o remount,rw /workspace</code></td><td>Permission denied (CAP_SYS_ADMIN dropped)</td><td>Layer 4 capabilities</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <strong>Run T1 and T2 first.</strong> They test the assumption that Docker bind-mount overlays correctly shadow on Colima. If they fail, the design falls back to Option B (enumerate every path individually as <code>:ro</code> or <code>:rw</code>) which is uglier but equivalent in effect.
+</div>
 
 <h2 id="decisions">Locked design decisions</h2>
 
 <table>
   <thead><tr><th>#</th><th>Decision</th><th>Rationale</th></tr></thead>
   <tbody>
-    <tr><td>1</td><td>Hermes runs inside <code>lcm-hermes-agent:latest</code></td><td>Already designed as content/policy/audit layer; natural place to host the control endpoint; agent stays credential-free.</td></tr>
-    <tr><td>2</td><td>AIDevOps talks to Hermes, not the agent</td><td>Clean boundary; agent shouldn't run HTTP servers; Hermes already does provider-side comms.</td></tr>
-    <tr><td>3</td><td>Two container mounts: <code>/workspace</code> + <code>/control</code></td><td>Work surface and audit substrate have different lifecycles, ownership, and review semantics.</td></tr>
-    <tr><td>4</td><td>Plan delivered as files in <code>/control/plan/</code> before launch</td><td>Same medium as status; survives restart; AIDevOps writes once and forgets.</td></tr>
-    <tr><td>5</td><td>Status + events as files in <code>/control/</code> always</td><td>Durable audit substrate independent of transport. MCP later carries the same shapes live.</td></tr>
-    <tr><td>6</td><td>Phase A transport: filesystem polling</td><td>Ships now, no upstream blockers; correct as a fallback even after Phase B lands.</td></tr>
-    <tr><td>7</td><td>Phase B transport: MCP Streamable HTTP + OAuth 2.1 per <code>SANDBOX-ORCHESTRATION.md</code></td><td>Already designed; blocked on upstream <code>claude-code</code> issues #28293 + #36665, not on architecture.</td></tr>
-    <tr><td>8</td><td>SSH / Ghostty rejected</td><td>Fights hardened container posture; live-debug use case is better served by mounting the same worktree into an interactive sandbox.</td></tr>
-    <tr><td>9</td><td>Downstream workflow triggering is an AIDevOps Workflow-Engine concern, not a sandbox concern</td><td>Sandbox reports events faithfully; workflow engine decides what to do based on plan's <code>exit_criteria</code>.</td></tr>
-    <tr><td>10</td><td>Schemas (<code>plan.json</code>, <code>status.json</code>, <code>events.jsonl</code>, <code>inbox/outbox</code>) are the load-bearing artifact</td><td>Both transports carry the same shapes; consumers don't break across the Phase A → B transition.</td></tr>
+    <tr><td>1</td><td>Hermes runs inside <code>lcm-hermes-agent:latest</code></td><td>Content and policy and audit layer; natural place for control endpoint; agent stays credential-free.</td></tr>
+    <tr><td>2</td><td>AIDevOps talks to Hermes, not the agent</td><td>Clean boundary; agent does not run HTTP servers; Hermes already does provider-side comms.</td></tr>
+    <tr><td>3</td><td>Two container mounts: <code>/workspace</code> with overlay model plus <code>/control</code></td><td>Different lifecycles, ownership, review semantics.</td></tr>
+    <tr><td>4</td><td>Sparse checkout is v1, not deferred</td><td>Mount surface is the real restriction. Paths outside scope are physically absent from the worktree.</td></tr>
+    <tr><td>5</td><td>Host-side POSIX is not a defense layer</td><td>Verified empirically: Colima virtiofs does not translate host POSIX into in-container enforcement.</td></tr>
+    <tr><td>6</td><td>Plan schema uses <code>required_paths.rw</code> and <code>read_exclusions</code></td><td>rw narrow declared scope; everything else implicitly readable via sparse checkout; secrets and vendored explicitly carved out.</td></tr>
+    <tr><td>7</td><td><code>repo_kind: new</code> or <code>existing</code> drives different mount defaults</td><td>Threat models differ; new repos can be more permissive; existing repos must protect functional code.</td></tr>
+    <tr><td>8</td><td>Hermes egress classification mitigates broad-read exfiltration</td><td>Builds on existing data classification policy work; makes broad read safe.</td></tr>
+    <tr><td>9</td><td>Topology-driven mount resolution via <code>docs/REPO-TOPOLOGY.md</code></td><td>Plan references logical scope; launcher resolves to concrete paths; operator reviews derivation before launch.</td></tr>
+    <tr><td>10</td><td>Plan delivered as files in <code>/control/plan/</code> before launch</td><td>Same medium as status; survives restart; AIDevOps writes once.</td></tr>
+    <tr><td>11</td><td>Status and events as files in <code>/control/</code> always</td><td>Durable audit substrate independent of transport.</td></tr>
+    <tr><td>12</td><td>Phase A transport filesystem polling</td><td>Ships now, no upstream blockers; correct as fallback even after Phase B.</td></tr>
+    <tr><td>13</td><td>Phase B transport MCP Streamable HTTP plus OAuth 2.1 per <code>SANDBOX-ORCHESTRATION.md</code></td><td>Already designed; blocked on upstream claude-code 28293 and 36665.</td></tr>
+    <tr><td>14</td><td>SSH or Ghostty rejected</td><td>Fights hardened container posture; live-debug use case is better served by mounting same worktree into an interactive sandbox.</td></tr>
+    <tr><td>15</td><td>Downstream triggering is workflow-engine concern, not sandbox</td><td>Sandbox reports faithfully; workflow engine drives next step based on plan exit_criteria.</td></tr>
+    <tr><td>16</td><td>Schemas are the load-bearing artifact</td><td>Both transports carry same shapes; consumers do not break across Phase A to B transition.</td></tr>
   </tbody>
 </table>
 
-<h2 id="decisions">Fit with existing artifacts</h2>
+<h2>Fit with existing artifacts</h2>
 
 <table>
-  <thead><tr><th>Artifact</th><th>Relationship to this design</th></tr></thead>
+  <thead><tr><th>Artifact</th><th>Relationship</th></tr></thead>
   <tbody>
-    <tr><td><code>SANDBOX-ARCHITECTURE.md</code></td><td>Describes what runs where; this doc extends it with the control-plane layer.</td></tr>
-    <tr><td><code>SANDBOX-DETAILED-FLOW.md</code></td><td>Phase-by-phase execution; needs an extension for the new "Hermes startup + plan load" sub-phase between launch and agent invocation.</td></tr>
-    <tr><td><code>SANDBOX-ORCHESTRATION.md</code> / <code>.html</code></td><td>Already designs the MCP/OAuth transport (Phase B). This doc adds the Phase A filesystem fallback and the schema layer that both phases share.</td></tr>
-    <tr><td><code>SANDBOX-FLOWS.html</code></td><td>End-to-end flows for create/cleanup/failure at the lifecycle level; this doc adds the in-flight control-plane interactions.</td></tr>
-    <tr><td><code>SANDBOX-IMAGE-TOOLCHAIN.md</code></td><td>Phase 2 image. Needs an addition: bake Hermes into the image, expose local port for agent, mount control directory.</td></tr>
-    <tr><td><code>aidevops/design/TODO.md</code> #110</td><td>Dev-sandbox UI/API trigger — separate product; reference only.</td></tr>
-    <tr><td><code>aidevops/design/TODO.md</code> #111–#114 (drafted)</td><td>Track the implementation of this design across aidevops + LCM-Sandbox.</td></tr>
-    <tr><td><code>aidevops/design/HERMES-PERSONA-INTEGRATION-PLAN.md</code> (uncommitted)</td><td>Persona work becomes the sandbox agent's persona when Hermes is in-image.</td></tr>
-    <tr><td><code>aidevops/design/LLM-DATA-CLASSIFICATION-POLICY.md</code> (uncommitted)</td><td>Classification policy is enforced by Hermes-in-sandbox at the egress point.</td></tr>
+    <tr><td><code>SANDBOX-ARCHITECTURE.md</code></td><td>What runs where; this doc extends with the control-plane layer.</td></tr>
+    <tr><td><code>SANDBOX-DETAILED-FLOW.md</code></td><td>Phase by phase; needs an addition for Phase 1b sparse-checkout and Hermes startup.</td></tr>
+    <tr><td><code>SANDBOX-ORCHESTRATION.md</code> and <code>.html</code></td><td>Designs Phase B MCP transport. This doc adds Phase A filesystem fallback and the shared schemas.</td></tr>
+    <tr><td><code>SANDBOX-FLOWS.html</code></td><td>Lifecycle flows; this doc adds in-flight control plane.</td></tr>
+    <tr><td><code>SANDBOX-IMAGE-TOOLCHAIN.md</code></td><td>Phase 2 image. Needs addition: bake Hermes, expose local port, mount control dir.</td></tr>
+    <tr><td><code>docs/REPO-TOPOLOGY.md</code> (per target repo)</td><td>Source of truth for topology-driven mount resolution. See aidevops TODO 117 and 118.</td></tr>
+    <tr><td><code>aidevops/design/TODO.md</code> 110</td><td>Dev-sandbox UI trigger; separate product; reference only.</td></tr>
+    <tr><td><code>aidevops/design/TODO.md</code> 111 to 115</td><td>Track implementation of this design.</td></tr>
+    <tr><td><code>aidevops/design/TODO.md</code> 117 to 120</td><td>Topology authoring, bootstrap skill, refresh skill, standard repo structure. Foundation that this design consumes.</td></tr>
+    <tr><td><code>aidevops/design/HERMES-PERSONA-INTEGRATION-PLAN.md</code></td><td>Persona work becomes the sandbox agent persona when Hermes is in-image.</td></tr>
+    <tr><td><code>aidevops/design/LLM-DATA-CLASSIFICATION-POLICY.md</code></td><td>Egress classification policy enforced by Hermes-in-sandbox; the load-bearing piece of decision 8.</td></tr>
   </tbody>
 </table>
 
-<h2 id="decisions">Open questions / deferred</h2>
+<h2>Open questions</h2>
 <ul>
-  <li><strong>Multi-operator response handling</strong> — what happens if two operators answer the same <code>ask</code> message? Last-write-wins, first-write-wins, or reject? Defer to v2.</li>
-  <li><strong>Sparse checkout for read isolation</strong> — LCM-Sandbox TODO #107. Defer; v1 mounts whole worktree, relies on ACL for write isolation.</li>
-  <li><strong>Hermes failure semantics</strong> — if Hermes crashes mid-run, can it restart and resume? Or does the run abort? Lean toward restart-and-resume (status.json + events.jsonl give recoverable state), but needs careful design of the agent's local connection logic.</li>
-  <li><strong>Domain-specific OS users in sandbox</strong> — LCM-Sandbox TODO #105. Independent of this design but should align: per-domain user adds OS-layer audit beyond Hermes' application-layer audit.</li>
-  <li><strong>Outbox/inbox garbage collection</strong> — resolved messages stay forever or get archived? Defer; trivial.</li>
+  <li>Multi-operator response handling: if two operators answer the same ask message, last-write-wins or reject? Defer.</li>
+  <li>Hermes failure semantics: if Hermes crashes mid-run, restart and resume or abort? Lean toward resume (status and events give recoverable state).</li>
+  <li>Outbox and inbox garbage collection: keep forever or archive? Defer.</li>
+  <li>Domain-specific OS users (LCM-Sandbox TODO 105): independent of this design but should align eventually.</li>
+  <li>Mount overlay vs explicit per-path mounts: verify overlay behavior on Colima before committing (test T1 and T2 above).</li>
 </ul>
 
 <script>
