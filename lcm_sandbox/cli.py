@@ -305,6 +305,63 @@ def cleanup(
     sys.exit(0)
 
 
+@main.command("scaffold")
+@click.option("--plan", "plan_path", required=True,
+              type=click.Path(dir_okay=False, exists=True),
+              help="Path to plan.json containing scaffolding_actions[].")
+@click.option("--target-path", "target_path", required=True,
+              type=click.Path(file_okay=False),
+              help="Absolute directory to scaffold into (must NOT exist).")
+@click.option("--control-dir", "control_dir", required=True,
+              type=click.Path(file_okay=False),
+              help="Control directory (status.json + events.jsonl written here).")
+@click.option("--run-id", "run_id_opt", default=None,
+              help="Run identifier (auto-generated if omitted).")
+def scaffold(plan_path: str, target_path: str, control_dir: str,
+             run_id_opt: str | None) -> None:
+    """Execute a deterministic scaffolding plan (RCW-4 Slice B v0).
+
+    Reads plan.scaffolding_actions[] and runs each action inline on the host,
+    emitting per-action events via the standard control-plane modules so
+    AIDevOps polling sees the same shape as Hermes runs.
+    """
+    from lcm_sandbox.commands.scaffold import (
+        ScaffoldError,
+        execute_scaffold_plan,
+        load_plan,
+    )
+    from lcm_sandbox.core.control_plane import ControlPaths
+
+    try:
+        plan = load_plan(Path(plan_path))
+        resolved_run_id = (run_id_opt or plan.get("run_id")
+                           or f"scaffold-{uuid.uuid4().hex[:12]}")
+        ctrl = ControlPaths(root=Path(control_dir))
+        ctrl.ensure_layout()
+        result = execute_scaffold_plan(
+            plan,
+            Path(target_path),
+            ctrl,
+            run_id=resolved_run_id,
+        )
+        payload = {
+            "status": "ok" if result.success else "failed",
+            "run_id": resolved_run_id,
+            "target_path": str(result.target_path),
+            "actions": result.actions,
+            "failed_action_index": result.failed_action_index,
+            "error_message": result.error_message,
+        }
+        click.echo(json.dumps(payload, indent=2))
+        sys.exit(0 if result.success else 6)
+    except ScaffoldError as exc:
+        click.echo(json.dumps(
+            {"status": "error", "error_type": "ScaffoldError", "message": str(exc)},
+            indent=2,
+        ), err=True)
+        sys.exit(6)
+
+
 def _die(exc: SandboxError) -> "None":
     payload = {
         "status": "error",

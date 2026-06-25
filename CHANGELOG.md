@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — RCW-4 Slice B v0 (deterministic scaffolding executor)
+- `lcm_sandbox/commands/scaffold.py` — new module that executes deterministic
+  scaffolding plans (write_file, git_init, git_commit actions) inline on the
+  host, emitting per-action events via the existing control-plane modules so
+  AIDevOps polling sees the same shape as Hermes runs. Per-action status
+  tracking (pending → running → done|failed), partial-failure handling (later
+  actions remain pending, partial scaffold preserved on disk), and
+  StatusWriter/EventLogger integration.
+- `lcm-sandbox scaffold --plan <path> --target-path <dir> --control-dir <dir>`
+  CLI command that wraps the executor.
+- 7 unit tests in `lcm_sandbox/tests/test_scaffold.py` covering happy path,
+  forced-failure mid-plan, missing actions, target-exists, malformed
+  write_file, and plan loading.
+- `SANDBOX-CONTROL-SCHEMA.md` documents `plan.scaffolding_actions[]` as an
+  optional, non-breaking schema extension (consumers without scaffolding
+  awareness ignore it). Reuses existing `step_started`, `step_completed`,
+  `failed`, `tasks_complete` event types.
+- Purpose: lets AIDevOps RCW-4 dispatch scaffolding into the sandbox without
+  going through a Hermes LLM loop, which would be wasteful for deterministic
+  work. The host-side execution in v0 is intentional; container-isolated
+  execution becomes a small follow-up commit (swap the action handlers for
+  `docker exec`-based execution; the surrounding tracking semantics stay
+  unchanged).
+
 ### Added — Plan Phase 1 (housekeeping)
 - Structured remaining-work plan for `/execute-plan` autonomous mode (`PLAN-REMAINING-WORK.md`) — `c2aa8e2`.
 - Phase 5 prerequisite verification doc (`docs/PHASE-5-PREREQS-VERIFICATION.md`) recording resolution of GH `claude-code` issues #28293 and #36665.

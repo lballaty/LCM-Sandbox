@@ -399,6 +399,48 @@ Hermes applies the data classification policy from `aidevops/design/LLM-DATA-CLA
 
 ---
 
+## Optional fields (non-breaking extensions)
+
+### `scaffolding_actions[]` on `plan.json` (added 2026-06-25)
+
+Used by the `lcm-sandbox scaffold` deterministic executor (RCW-4 Slice B v0). When present, the executor reads this list instead of going through the Hermes LLM-agent loop and executes filesystem operations directly. Hermes runs ignore this field.
+
+```json
+{
+  "schema_version": "1",
+  "scaffolding_actions": [
+    { "action": "write_file", "path": "README.md", "content": "..." },
+    { "action": "write_file", "path": "AGENTS.md", "content": "..." },
+    { "action": "git_init" },
+    { "action": "git_commit", "message": "Initial scaffold" }
+  ]
+}
+```
+
+Per-action fields:
+
+| Action | Required fields | Optional fields | Notes |
+|---|---|---|---|
+| `write_file` | `path` (relative to target dir), `content` | — | Creates parent directories as needed. |
+| `git_init` | — | — | Runs `git init` in the target directory. |
+| `git_commit` | — | `message` (default `"Initial scaffold"`) | Runs `git add -A` then `git commit -m <message>`. |
+
+Per-action runtime state (mutated by the executor and surfaced in `status.json.scaffolding_actions[]`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `status` | `pending` \| `running` \| `done` \| `failed` | Set by the executor as the action progresses. |
+| `error_message` | string | Set only when `status === 'failed'`. |
+
+Events emitted to `events.jsonl` during scaffolding (reuses existing known types):
+
+- `step_started` with `{ index, action, path }`
+- `step_completed` with `{ index, action }`
+- `failed` with `{ index, action, error }`
+- `tasks_complete` with `{ actions_completed }`
+
+---
+
 ## Cross-references
 
 - Architecture and flows: `SANDBOX-CONTROL-PLANE.html`
@@ -407,3 +449,4 @@ Hermes applies the data classification policy from `aidevops/design/LLM-DATA-CLA
 - aidevops integration endpoints: TODO #113
 - LLM classification policy: `aidevops/design/LLM-DATA-CLASSIFICATION-POLICY.md`
 - Persona work: `aidevops/design/HERMES-PERSONA-INTEGRATION-PLAN.md`
+- Scaffolding executor (RCW-4 Slice B v0): `lcm_sandbox/commands/scaffold.py`; aidevops integration in `server/services/repo-creation/executor.js`
