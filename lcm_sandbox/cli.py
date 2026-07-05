@@ -157,6 +157,10 @@ def create(
 @click.option("--mcp-token", default=None)
 @click.option("--model-provider", default=None)
 @click.option("--model-key", default=None)
+@click.option("--provider-api-key-env", default=None,
+              help="Provider credential env var name to render into Hermes .env (for example OPENAI_API_KEY).")
+@click.option("--provider-api-key", default=None,
+              help="Provider credential value rendered into Hermes .env before gateway startup.")
 @click.option("--egress-allowlist", "egress_allowlist_spec", default=None,
               help='Comma-separated HOST[:PORT] entries the sandbox is allowed '
                    'to reach. Advisory until the host-side restricted bridge '
@@ -175,6 +179,8 @@ def launch(
     mcp_token: str | None,
     model_provider: str | None,
     model_key: str | None,
+    provider_api_key_env: str | None,
+    provider_api_key: str | None,
     egress_allowlist_spec: str | None,
 ) -> None:
     """Launch a sandbox container (Phase 4)."""
@@ -212,6 +218,8 @@ def launch(
             mcp_token=mcp_token,
             model_provider=model_provider,
             model_key=model_key,
+            provider_api_key_env=provider_api_key_env,
+            provider_api_key=provider_api_key,
             egress_allowlist=egress_allowlist or None,
         )
     except SandboxError as exc:

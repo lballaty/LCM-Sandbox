@@ -49,6 +49,8 @@ class RenderConfig:
     mcp_url: str = ""
     model_provider: str = ""
     model_key: str = ""
+    provider_api_key_env: str = ""
+    provider_api_key: str = ""
     # Optional override: if the caller already knows the persona id, skip the lookup.
     persona_id: int | None = None
 
@@ -271,13 +273,17 @@ def render_persona(cfg: RenderConfig) -> RenderResult:
     (output_dir / "MEMORY.md").write_text(memory_md, encoding="utf-8")
     rendered.append("MEMORY.md")
 
-    # 7. .env with API_SERVER_KEY (Phase 0 Finding 2 + 4 — same token both directions).
+    # 7. .env with API_SERVER_KEY plus the selected model-provider credential.
     env_lines = [
         f"# File: .env (rendered by persona-state-renderer at {datetime.now(timezone.utc).isoformat()})",
         f"# Persona: {cfg.persona_key} (id={persona_id})",
         f"API_SERVER_KEY={cfg.mcp_token}" if cfg.mcp_token else "# API_SERVER_KEY not set (no --mcp-token provided)",
-        "",
     ]
+    if cfg.provider_api_key_env and cfg.provider_api_key:
+        env_lines.append(f"{cfg.provider_api_key_env}={cfg.provider_api_key}")
+    elif cfg.provider_api_key:
+        env_lines.append("# Provider API key value supplied without env var name; skipped")
+    env_lines.append("")
     (output_dir / ".env").write_text("\n".join(env_lines), encoding="utf-8")
     rendered.append(".env")
 

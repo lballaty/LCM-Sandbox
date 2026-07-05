@@ -211,7 +211,9 @@ if [ -n "${HERMES_PERSONA}" ]; then
         --mcp-url '${MCP_SERVER_URL:-}' \
         --mcp-token '${MCP_TOKEN:-}' \
         --model-provider '${MODEL_PROVIDER:-}' \
-        --model-key '${MODEL_KEY:-}'" \
+        --model-key '${MODEL_KEY:-}' \
+        --provider-api-key-env '${MODEL_API_KEY_ENV:-}' \
+        --provider-api-key '${MODEL_API_KEY:-}'" \
         || die "persona-state-renderer failed"
     else
       log "4.5.10 WARN — persona-state-renderer not installed in image; skipping render"

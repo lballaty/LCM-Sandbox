@@ -44,6 +44,10 @@ def _default_api_key() -> str:
 @click.option("--mcp-url", default="", help="MCP server URL (substituted into config.yaml).")
 @click.option("--model-provider", default="", help="LLM provider key (substituted into config.yaml).")
 @click.option("--model-key", default="", help="LLM model key (substituted into config.yaml).")
+@click.option("--provider-api-key-env", default="",
+              help="Provider credential env var name rendered into Hermes .env.")
+@click.option("--provider-api-key", default="",
+              help="Provider credential value rendered into Hermes .env.")
 def render_cmd(
     persona_key: str | None,
     persona_id: int | None,
@@ -55,6 +59,8 @@ def render_cmd(
     mcp_url: str,
     model_provider: str,
     model_key: str,
+    provider_api_key_env: str,
+    provider_api_key: str,
 ) -> None:
     """Render a persona's state into a host directory."""
     if not persona_key and not persona_id:
@@ -72,6 +78,8 @@ def render_cmd(
         mcp_url=mcp_url,
         model_provider=model_provider,
         model_key=model_key,
+        provider_api_key_env=provider_api_key_env,
+        provider_api_key=provider_api_key,
     )
     try:
         result = render_persona(cfg)

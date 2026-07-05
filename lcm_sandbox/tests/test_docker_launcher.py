@@ -66,6 +66,8 @@ def test_build_run_argv_contains_required_flags(cfg, worktree):
         mcp_token=None,
         model_provider=None,
         model_key=None,
+        provider_api_key_env=None,
+        provider_api_key=None,
     )
     assert argv[0] == "docker"
     assert argv[1] == "run"
@@ -110,6 +112,8 @@ def test_build_run_argv_propagates_hermes_env(cfg, worktree):
         mcp_token="tok-123",
         model_provider="anthropic",
         model_key="claude-opus-4-7",
+        provider_api_key_env="ANTHROPIC_API_KEY",
+        provider_api_key="sk-ant-123",
     )
     flat = " ".join(argv)
     assert "HERMES_PERSONA=config-auditor" in flat
@@ -117,6 +121,8 @@ def test_build_run_argv_propagates_hermes_env(cfg, worktree):
     assert "MCP_TOKEN=tok-123" in flat
     assert "MODEL_PROVIDER=anthropic" in flat
     assert "MODEL_KEY=claude-opus-4-7" in flat
+    assert "MODEL_API_KEY_ENV=ANTHROPIC_API_KEY" in flat
+    assert "MODEL_API_KEY=sk-ant-123" in flat
 
 
 def test_build_run_argv_omits_hermes_env_when_absent(cfg, worktree):
@@ -129,6 +135,8 @@ def test_build_run_argv_omits_hermes_env_when_absent(cfg, worktree):
         mcp_token=None,
         model_provider=None,
         model_key=None,
+        provider_api_key_env=None,
+        provider_api_key=None,
     )
     flat = " ".join(argv)
     assert "HERMES_PERSONA" not in flat
@@ -390,10 +398,11 @@ def test_build_argv_includes_egress_env_when_set(cfg, tmp_path):
         mcp_token=None,
         model_provider=None,
         model_key=None,
+        provider_api_key_env=None,
+        provider_api_key=None,
         egress_allowlist=[('api.openai.com', 443), ('deb.nodesource.com', None)],
     )
     envs = [argv[i + 1] for i, a in enumerate(argv) if a == '-e']
     egress = [e for e in envs if e.startswith('LCM_EGRESS_ALLOWLIST=')]
     assert len(egress) == 1
     assert egress[0] == 'LCM_EGRESS_ALLOWLIST=api.openai.com:443,deb.nodesource.com'
-

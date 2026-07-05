@@ -2,8 +2,9 @@
 # Description: Phase 4 container launch. Builds the docker-run argv (STEP 4.1-4.3),
 #              starts the container, and polls until it reports "Up" (STEP 4.4).
 #              Hermes-aware: propagates HERMES_PERSONA, MCP_SERVER_URL, MCP_TOKEN,
-#              MODEL_PROVIDER, MODEL_KEY into the container so the entrypoint can
-#              render persona state and start the Hermes gateway.
+#              MODEL_PROVIDER, MODEL_KEY, and provider credential env/value into
+#              the container so the entrypoint can render persona state and start
+#              the Hermes gateway.
 # Author: Libor Ballaty <libor@arionetworks.com>
 # Created: 2026-06-12
 
@@ -101,6 +102,8 @@ def _build_run_argv(
     mcp_token: str | None,
     model_provider: str | None,
     model_key: str | None,
+    provider_api_key_env: str | None,
+    provider_api_key: str | None,
     egress_allowlist: list[tuple[str, int | None]] | None = None,
 ) -> list[str]:
     """Construct the `docker run` argv per STEP 4.1-4.3.
@@ -163,6 +166,10 @@ def _build_run_argv(
         argv += ["-e", f"MODEL_PROVIDER={model_provider}"]
     if model_key:
         argv += ["-e", f"MODEL_KEY={model_key}"]
+    if provider_api_key_env:
+        argv += ["-e", f"MODEL_API_KEY_ENV={provider_api_key_env}"]
+    if provider_api_key:
+        argv += ["-e", f"MODEL_API_KEY={provider_api_key}"]
 
     if egress_allowlist:
         # Pass the parsed list into the container so the entrypoint (or a
@@ -194,6 +201,8 @@ def launch_container(
     mcp_token: str | None = None,
     model_provider: str | None = None,
     model_key: str | None = None,
+    provider_api_key_env: str | None = None,
+    provider_api_key: str | None = None,
     egress_allowlist: list[tuple[str, int | None]] | None = None,
     launch_timeout_seconds: int = 60,
 ) -> ContainerLaunchResult:
@@ -217,6 +226,8 @@ def launch_container(
         mcp_token=mcp_token,
         model_provider=model_provider,
         model_key=model_key,
+        provider_api_key_env=provider_api_key_env,
+        provider_api_key=provider_api_key,
         egress_allowlist=egress_allowlist,
     )
 
