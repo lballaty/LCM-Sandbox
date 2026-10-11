@@ -1,0 +1,175 @@
+# File: LCM-Sandbox/scripts/Dockerfile.fleet-worker
+# Description: FLEET WORKER image (P1). Overlay on the HARDENED lcm-hermes-agent
+#              image that adds the three npm agent CLIs (claude, codex, gemini),
+#              the Antigravity CLI (agy), and tmux — so one disposable unit can
+#              run any agent in the fleet. Identity and credentials are injected
+#              at launch, never baked. See
+#              ~/.ai-dev-dotfiles/design/FLEET-WORKER-SANDBOX-DEFINITION.md §2
+#              and FLEET-CONTROL-PLANE-AND-ISOLATION-DESIGN.md §7.
+# Author: Claude (Opus 5) — ai-dev-dotfiles-d0
+# Created: 2026-10-11
+# Tag: lcm-fleet-worker:latest
+#
+# ---------------------------------------------------------------------------
+# WHY THIS IS AN OVERLAY ON lcm-hermes-agent, NOT ON lcm-dev-sandbox
+# ---------------------------------------------------------------------------
+# The two design docs disagree, and this file follows the NEWER one:
+#
+#   FLEET-WORKER-SANDBOX-DEFINITION.md §7  (2026-09-15)
+#     "Add a lcm-fleet-worker image = dev-sandbox + agy + hermes + tmux"
+#   FLEET-CONTROL-PLANE-AND-ISOLATION-DESIGN.md §7  (2026-09-25)
+#     "The worker overlay derives from its hardened (hermes) image, not the
+#      permissive dev-sandbox."
+#
+# The newer doc is also the correct one on the merits. Dockerfile.dev-sandbox
+# grants the agent user PASSWORDLESS ROOT:
+#     echo 'aiagent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/aiagent
+# A worker unit whose whole purpose is least-privilege confinement cannot be
+# built on an image that hands the agent unrestricted sudo. Deriving from
+# dev-sandbox would silently undo the confinement this unit exists to provide.
+#
+# Building on lcm-hermes-agent inherits, for free, the things the worker needs
+# and dev-sandbox does not have: NO sudo at all, the rm-shim, the privilege-
+# dropping entrypoint, the agent-profile mechanism, the bootstrap smoke test,
+# and the /control control-plane wiring with sandbox-emit.
+#
+# ACTION: FLEET-WORKER-SANDBOX-DEFINITION.md §7 should be updated to match;
+# it is stale, not merely differently-worded.
+#
+# COST, STATED PLAINLY: lcm-hermes-agent is already ~3.94 GB (see the SIZE
+# BUDGET note in Dockerfile.hermes). This overlay adds Node 20, three npm CLIs,
+# the agy binary and tmux on top. The worker image will be LARGE. That is a
+# deliberate trade of size for a single image that can run any agent role;
+# slimming (role-specific images, multi-stage) is D1 in the design doc and is
+# explicitly deferred. Do not "fix" the size by rebasing onto dev-sandbox —
+# that trades away the confinement, which is the point of the unit.
+# ---------------------------------------------------------------------------
+
+ARG BASE_IMAGE=lcm-hermes-agent:latest
+FROM ${BASE_IMAGE}
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG NODE_MAJOR=20
+
+# Pin the Antigravity installer. agy is a single Go binary installed via a
+# shell script (resolved 2026-09-25, ai-dev-dotfiles d4f6e4d): not npm.
+# Leave AGY_INSTALLER_SHA256 empty for a personal build and the build PRINTS
+# the hash it fetched so you can pin it. Set it, and a mismatch FAILS the
+# build. Any shared or hardened build MUST set it — `curl | bash` against an
+# unpinned script is the supply-chain hole the design flagged.
+ARG AGY_INSTALL_URL=https://antigravity.google/cli/install.sh
+ARG AGY_INSTALLER_SHA256=""
+
+USER root
+
+# ---------------------------------------------------------------------------
+# The rm-shim must be stood down for the duration of the build.
+# ---------------------------------------------------------------------------
+# The base image installs a defensive `rm` at /usr/local/bin/rm that REJECTS
+# any path outside {/workspace,/tmp,/var/tmp,~/.cache,~/.local}. /usr/local/bin
+# precedes /bin on PATH, so ordinary image hygiene — `rm -rf
+# /var/lib/apt/lists/*` — is blocked and FAILS THE BUILD. The NodeSource setup
+# script also removes files outside the safelist internally.
+#
+# So: move the shim aside, build, put it back. A failed RUN aborts the build
+# and produces no image, so there is no path that ships a half-built layer —
+# but the restore is verified at the end regardless, because an image that
+# silently lost its rm-shim would be a confinement regression that nothing
+# else would catch.
+RUN mv /usr/local/bin/rm /usr/local/bin/rm-shim.disabled
+
+# Node.js — required by claude, codex and gemini. The base image has Node only
+# inside Hermes' private runtime (~/.hermes/node); there is no system npm.
+RUN apt-get update && \
+    curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs tmux && \
+    /bin/rm -rf /var/lib/apt/lists/* && \
+    node --version && npm --version && tmux -V
+
+# Agent CLIs, one RUN each so a transient registry failure fails the build
+# rather than silently producing an image that is missing a CLI.
+RUN npm install -g @anthropic-ai/claude-code && claude --version
+RUN npm install -g @openai/codex && codex --version
+RUN npm install -g @google/gemini-cli && gemini --version
+
+# --- agy (Antigravity CLI) -------------------------------------------------
+# Installed as aiagent: it is a per-user install and its config lives in
+# ~/.gemini/antigravity-cli/. Fetch to a file first so the script can be
+# hashed before execution, rather than piped straight into a shell.
+USER aiagent
+WORKDIR /home/aiagent
+RUN set -eu; \
+    curl -fsSL "${AGY_INSTALL_URL}" -o /tmp/agy-install.sh; \
+    actual="$(sha256sum /tmp/agy-install.sh | cut -d' ' -f1)"; \
+    echo "agy installer sha256: ${actual}"; \
+    if [ -n "${AGY_INSTALLER_SHA256}" ]; then \
+        if [ "${actual}" != "${AGY_INSTALLER_SHA256}" ]; then \
+            echo "FATAL: agy installer checksum mismatch." >&2; \
+            echo "  expected: ${AGY_INSTALLER_SHA256}" >&2; \
+            echo "  actual:   ${actual}" >&2; \
+            exit 1; \
+        fi; \
+        echo "agy installer checksum VERIFIED against the pin"; \
+    else \
+        echo "WARNING: AGY_INSTALLER_SHA256 not set — installer NOT pinned."; \
+        echo "WARNING: pin the hash above for any shared or hardened build."; \
+    fi; \
+    bash /tmp/agy-install.sh; \
+    /bin/rm -f /tmp/agy-install.sh
+
+# agy must be on PATH. The base already exports ~/.local/bin. If the installer
+# chose somewhere else this FAILS LOUDLY here rather than producing a worker
+# that is quietly missing one of its five CLIs.
+ENV PATH="/home/aiagent/.local/bin:${PATH}"
+RUN command -v agy >/dev/null 2>&1 || { \
+        echo "FATAL: agy not on PATH after install. Searching..." >&2; \
+        find /home/aiagent /usr/local -maxdepth 4 -name 'agy*' -type f 2>/dev/null >&2; \
+        exit 1; \
+    }
+
+# --- Fleet identity (L0) ---------------------------------------------------
+# Declared empty ON PURPOSE. These are what tell the unit WHICH agent it is and
+# which inbox is its; they are injected with `docker run -e` at launch. A value
+# baked here would make every container from this image claim the same
+# identity, which breaks the uniqueness rule in
+# ~/.ai-dev-dotfiles/docs/FLEET-NAMING-AND-IDENTITY.md.
+#
+# NO CREDENTIALS BELONG HERE EITHER. ANTHROPIC_API_KEY / OPENAI_API_KEY /
+# GEMINI_API_KEY are injected at run time. agy in particular needs its provider
+# set AND the key env var — the key alone is not enough (design d4f6e4d).
+ENV FLEET_ID="" \
+    QUEUECTL_AGENT="" \
+    AGENT_NAME="" \
+    NODE_ID=""
+
+# --- Restore hardening and assert it ---------------------------------------
+USER root
+RUN mv /usr/local/bin/rm-shim.disabled /usr/local/bin/rm && \
+    chmod 755 /usr/local/bin/rm && \
+    chown root:root /usr/local/bin/rm
+
+# Confinement assertions. Each one is a property a future edit could remove
+# without any other test noticing, so they are checked at build time.
+RUN set -eu; \
+    [ "$(command -v rm)" = "/usr/local/bin/rm" ] \
+        || { echo "FATAL: rm-shim not first on PATH" >&2; exit 1; }; \
+    /usr/local/bin/rm -rf /etc/hostname 2>/dev/null \
+        && { echo "FATAL: rm-shim did not block a path outside the safelist" >&2; exit 1; } \
+        || echo "OK: rm-shim active and blocking"; \
+    [ ! -f /etc/sudoers.d/aiagent ] \
+        || { echo "FATAL: worker image grants aiagent sudo" >&2; exit 1; }; \
+    command -v sudo >/dev/null 2>&1 \
+        && { echo "FATAL: sudo is installed in the worker image" >&2; exit 1; } \
+        || echo "OK: no sudo"; \
+    for c in claude codex gemini hermes agy tmux; do \
+        command -v "$c" >/dev/null 2>&1 \
+            || { echo "FATAL: missing CLI: $c" >&2; exit 1; }; \
+    done; \
+    echo "OK: all five agent CLIs + tmux present"
+
+# ENTRYPOINT and CMD are inherited from lcm-hermes-agent deliberately: the
+# entrypoint runs as root, fixes /workspace ownership, applies the agent
+# profile, runs the bootstrap smoke test, and only then drops to aiagent.
+# Re-declaring it here would be a second way to do something the base already
+# does one way.
+USER root
