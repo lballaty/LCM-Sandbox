@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,6 +112,51 @@ class FleetIdentity(BaseModel):
             "-e", f"NODE_ID={self.node_id}",
             "-e", f"QUEUECTL_AGENT={self.queuectl_agent}",
         ]
+
+
+class RemoteNode(BaseModel):
+    """A fleet host to run the container ON, instead of this machine (P3).
+
+    Every docker call in this module previously went to the LOCAL daemon, so
+    the fleet could only ever run units on the orchestrator's own box. This is
+    the whole of the cross-machine gap: the control plane already spans hosts
+    (Tailscale SSH is verified transport), but the launcher did not use it.
+
+    Deliberately a transport wrapper and nothing more. The docker argv is
+    unchanged — it is simply executed somewhere else — so remote and local
+    launches cannot drift apart in what they actually run, which is the
+    failure mode a separate remote code path would invite.
+
+    IMPORTANT: every path in that argv (worktree, control dir) is resolved on
+    the REMOTE host. The caller must not pass local paths and assume they
+    exist there; `launch_container` checks them over the wire instead of
+    against the local filesystem.
+    """
+
+    host: str
+    user: str | None = None
+    #: Default is Tailscale SSH: the fleet's verified, deny-by-default
+    #: transport. Overridable for plain ssh or a jump-host wrapper.
+    ssh_command: list[str] = Field(default_factory=lambda: ["tailscale", "ssh"])
+
+    def target(self) -> str:
+        return f"{self.user}@{self.host}" if self.user else self.host
+
+    def wrap(self, argv: list[str]) -> list[str]:
+        """Wrap a local argv so it executes on this node.
+
+        ``shlex.join`` is load-bearing: ssh hands the command to a remote
+        SHELL, and the docker argv contains JSON with quotes and braces
+        (ALLOWED_PATHS, --format '{{.Status}}'). Passing it unquoted would let
+        the remote shell re-split and mangle it, and in the worst case
+        interpret a value as syntax.
+        """
+        return [*self.ssh_command, self.target(), shlex.join(argv)]
+
+
+def _docker(argv: list[str], remote: RemoteNode | None) -> list[str]:
+    """Route a docker argv at the local daemon or a fleet node."""
+    return remote.wrap(argv) if remote else argv
 
 
 class ResourceLimits(BaseModel):
@@ -313,29 +359,49 @@ def launch_container(
     fleet_identity: FleetIdentity | None = None,
     control_dir: Path | None = None,
     resource_limits: ResourceLimits | None = None,
+    remote: RemoteNode | None = None,
     launch_timeout_seconds: int = 60,
 ) -> ContainerLaunchResult:
     """Launch a sandbox container and verify it reaches "Up" state.
 
     Raises DockerLaunchError on failure with the failing step recorded.
     """
-    if not worktree_path.exists():
-        raise DockerLaunchError(
-            "worktree_path does not exist",
-            step="4.2",
-            worktree_path=str(worktree_path),
-        )
-
-    # Fail before `docker run` rather than after. Docker would happily create
-    # the directory as root, and the agent (uid 1000) would then find /control
-    # unwritable — surfacing much later as an empty outbox rather than as a
-    # launch error.
-    if control_dir is not None and not control_dir.exists():
-        raise DockerLaunchError(
-            "control_dir does not exist",
-            step="4.2",
-            control_dir=str(control_dir),
-        )
+    # Path checks must interrogate the machine that will actually mount them.
+    # Calling Path.exists() for a remote launch asks the ORCHESTRATOR's
+    # filesystem about the WORKER's paths — which silently passes whenever the
+    # two happen to share a layout (they do here: both are
+    # /Users/liborballaty/...), and silently fails when they do not. Either way
+    # the answer is meaningless. Check over the wire instead.
+    for label, path in (("worktree_path", worktree_path),
+                        ("control_dir", control_dir)):
+        if path is None:
+            continue
+        if remote is None:
+            missing = not path.exists()
+        else:
+            probe = run(
+                remote.wrap(["test", "-d", str(path)]), timeout=20,
+            )
+            # A non-zero exit means "absent"; a transport failure is a
+            # different problem and must not be reported as a missing dir.
+            if probe.returncode not in (0, 1):
+                raise DockerLaunchError(
+                    f"could not reach {remote.target()} to check {label}",
+                    step="4.2",
+                    node=remote.host,
+                    stderr=(probe.stderr or probe.stdout).strip()[:500],
+                )
+            missing = probe.returncode != 0
+        if missing:
+            # Docker would create a missing bind-mount source as root; the
+            # agent (uid 1000) then cannot write it, which surfaces much later
+            # as an empty outbox rather than as a launch error.
+            raise DockerLaunchError(
+                f"{label} does not exist"
+                + (f" on {remote.target()}" if remote else ""),
+                step="4.2",
+                **{label: str(path)},
+            )
 
     argv = _build_run_argv(
         sandbox_config=sandbox_config,
@@ -365,7 +431,7 @@ def launch_container(
             "hermes_persona": hermes_persona,
         },
     )
-    result = run(argv, timeout=launch_timeout_seconds)
+    result = run(_docker(argv, remote), timeout=launch_timeout_seconds)
     if not result.ok:
         err = (result.stderr or result.stdout).strip()
         logger.error(
@@ -389,9 +455,10 @@ def launch_container(
     container_id = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else None
 
     # STEP 4.4: poll `docker ps --filter name=...` until status begins with "Up".
-    if not _wait_until_up(sandbox_config.run_id, HEALTH_POLL_TIMEOUT_SECONDS):
+    if not _wait_until_up(sandbox_config.run_id, HEALTH_POLL_TIMEOUT_SECONDS,
+                          remote):
         # Container was created but did not reach Up. Surface diagnostic logs.
-        logs = _container_logs(sandbox_config.run_id)
+        logs = _container_logs(sandbox_config.run_id, remote)
         logger.error(
             "phase4_container_not_up",
             extra={
@@ -429,13 +496,14 @@ def launch_container(
     )
 
 
-def _wait_until_up(sandbox_id: str, timeout_seconds: int) -> bool:
+def _wait_until_up(sandbox_id: str, timeout_seconds: int,
+                   remote: RemoteNode | None = None) -> bool:
     """Poll `docker ps` until the container's status starts with 'Up'."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         result = run(
-            ["docker", "ps", "--filter", f"name={sandbox_id}",
-             "--format", "{{.Status}}"],
+            _docker(["docker", "ps", "--filter", f"name={sandbox_id}",
+                     "--format", "{{.Status}}"], remote),
             timeout=10,
         )
         if result.ok:
@@ -446,34 +514,36 @@ def _wait_until_up(sandbox_id: str, timeout_seconds: int) -> bool:
     return False
 
 
-def _container_logs(sandbox_id: str) -> str:
-    result = run(["docker", "logs", sandbox_id], timeout=10)
+def _container_logs(sandbox_id: str, remote: RemoteNode | None = None) -> str:
+    result = run(_docker(["docker", "logs", sandbox_id], remote), timeout=10)
     return (result.stdout or "") + (result.stderr or "")
 
 
-def stop_container(sandbox_id: str, *, remove: bool = True, timeout: int = 10) -> dict:
+def stop_container(sandbox_id: str, *, remove: bool = True, timeout: int = 10,
+                   remote: RemoteNode | None = None) -> dict:
     """Stop (and optionally remove) the named container.
 
     WP-3 capture happens before this is called; here we only tear down.
     """
-    stop_res = run(["docker", "stop", "-t", str(timeout), sandbox_id], timeout=timeout + 10)
+    stop_res = run(_docker(["docker", "stop", "-t", str(timeout), sandbox_id], remote),
+                   timeout=timeout + 10)
     payload: dict = {
         "sandbox_id": sandbox_id,
         "stopped": stop_res.ok,
         "stop_stderr": stop_res.stderr.strip(),
     }
     if remove:
-        rm_res = run(["docker", "rm", "-f", sandbox_id], timeout=15)
+        rm_res = run(_docker(["docker", "rm", "-f", sandbox_id], remote), timeout=15)
         payload["removed"] = rm_res.ok
         payload["rm_stderr"] = rm_res.stderr.strip()
     return payload
 
 
-def container_status(sandbox_id: str) -> dict:
+def container_status(sandbox_id: str, remote: RemoteNode | None = None) -> dict:
     """Return basic status JSON for the named container, suitable for CLI output."""
     res = run(
-        ["docker", "ps", "-a", "--filter", f"name={sandbox_id}",
-         "--format", "{{.ID}}\t{{.Status}}\t{{.Image}}"],
+        _docker(["docker", "ps", "-a", "--filter", f"name={sandbox_id}",
+                 "--format", "{{.ID}}\t{{.Status}}\t{{.Image}}"], remote),
         timeout=10,
     )
     if not res.ok:

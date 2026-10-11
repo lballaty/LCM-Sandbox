@@ -19,6 +19,7 @@ from lcm_sandbox.core.docker_launcher import (
     DEFAULT_IMAGE_TAG,
     HERMES_INTERNAL_PORT,
     FleetIdentity,
+    RemoteNode,
     ResourceLimits,
     _build_run_argv,
     launch_container,
@@ -536,3 +537,125 @@ def test_image_stays_the_last_positional_arg(cfg, worktree, tmp_path):
         resource_limits=ResourceLimits(memory="1g"),
     )
     assert argv[-1] == DEFAULT_IMAGE_TAG
+
+
+# ---------------------------------------------------------------------------
+# P3: remote node transport.
+#
+# Before this, every docker call went to the LOCAL daemon, so the fleet could
+# only run units on the orchestrator's own machine. RemoteNode wraps the SAME
+# argv for execution elsewhere — deliberately not a second code path, so local
+# and remote cannot drift in what they actually run.
+# ---------------------------------------------------------------------------
+
+def test_remote_defaults_to_tailscale_ssh():
+    """Tailscale SSH is the fleet's verified, deny-by-default transport."""
+    assert RemoteNode(host="intel-macos-worker").ssh_command == ["tailscale", "ssh"]
+
+
+def test_remote_target_includes_user_only_when_set():
+    assert RemoteNode(host="h").target() == "h"
+    assert RemoteNode(host="h", user="u").target() == "u@h"
+
+
+def test_wrap_quotes_the_whole_command_as_one_argument():
+    """ssh hands its command to a REMOTE SHELL. The argv must arrive as a
+    single quoted string or the shell re-splits it."""
+    wrapped = RemoteNode(host="h").wrap(["docker", "ps", "-a"])
+    assert wrapped[:3] == ["tailscale", "ssh", "h"]
+    assert len(wrapped) == 4, wrapped
+
+
+def test_wrap_survives_json_and_go_template_arguments():
+    """The two argument shapes that would actually break: ALLOWED_PATHS is
+    JSON with quotes, and --format is a Go template with braces. Round-trip
+    through shlex to prove the remote shell reconstructs the exact argv."""
+    import shlex
+    argv = [
+        "docker", "run",
+        "-e", '''ALLOWED_PATHS={"write":["src/"],"read":["*"]}''',
+        "--format", "{{.ID}}\t{{.Status}}",
+        "-e", "MSG=has space; and semicolon",
+        "img:latest",
+    ]
+    wrapped = RemoteNode(host="h").wrap(argv)
+    assert shlex.split(wrapped[3]) == argv
+
+
+def test_remote_wrapping_does_not_alter_the_docker_argv(cfg, worktree):
+    """The command run remotely must be byte-identical to the local one."""
+    import shlex
+    local = _argv(cfg, worktree)
+    assert shlex.split(RemoteNode(host="h").wrap(local)[3]) == local
+
+
+def test_docker_helper_is_a_passthrough_when_local():
+    argv = ["docker", "ps"]
+    assert docker_launcher._docker(argv, None) is argv
+
+
+def test_remote_launch_checks_paths_on_the_REMOTE_host(cfg, worktree, tmp_path):
+    """The bug this prevents: Path.exists() asks the ORCHESTRATOR about the
+    WORKER's paths. Both machines here use /Users/liborballaty/..., so a local
+    check would pass by coincidence and the container would fail later."""
+    absent_here = tmp_path / "exists-only-on-the-worker"
+    assert not absent_here.exists()
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kw):
+        calls.append(args)
+        if "test" in args[-1] if isinstance(args[-1], str) else False:
+            return _ok()
+        return _ok("deadbeef")
+
+    with patch.object(docker_launcher, "run", side_effect=fake_run), \
+         patch.object(docker_launcher, "_wait_until_up", return_value=True):
+        result = launch_container(
+            cfg,
+            worktree_path=absent_here,
+            remote=RemoteNode(host="intel-macos-worker"),
+        )
+
+    # It did NOT raise on the locally-absent path, and it probed over the wire.
+    assert result.status == "running"
+    probe = calls[0]
+    assert probe[:3] == ["tailscale", "ssh", "intel-macos-worker"]
+    assert "test -d" in probe[3]
+
+
+def test_remote_transport_failure_is_not_reported_as_missing_dir(cfg, worktree):
+    """Exit 1 means absent; anything else means we could not ask. Conflating
+    them would send someone hunting for a directory when the node is asleep —
+    which is exactly what this fleet's worker does."""
+    from lcm_sandbox.exceptions import DockerLaunchError
+
+    def unreachable(args, **kw):
+        return CommandResult(args=args, returncode=255, stdout="",
+                             stderr="ssh: connect to host ...: Operation timed out",
+                             cwd=None)
+
+    with patch.object(docker_launcher, "run", side_effect=unreachable):
+        with pytest.raises(DockerLaunchError) as exc:
+            launch_container(cfg, worktree_path=worktree,
+                             remote=RemoteNode(host="asleep-node"))
+    assert "could not reach" in str(exc.value)
+
+
+def test_stop_and_status_also_route_to_the_node():
+    """A unit launched remotely must be stoppable remotely; otherwise the
+    orchestrator starts containers it cannot reap."""
+    seen: list[list[str]] = []
+
+    def fake_run(args, **kw):
+        seen.append(args)
+        return _ok("abc\tUp 3 seconds\timg")
+
+    node = RemoteNode(host="worker1")
+    with patch.object(docker_launcher, "run", side_effect=fake_run):
+        docker_launcher.stop_container("run_xyz", remote=node)
+        docker_launcher.container_status("run_xyz", remote=node)
+
+    assert seen, "no commands issued"
+    for args in seen:
+        assert args[:3] == ["tailscale", "ssh", "worker1"], args

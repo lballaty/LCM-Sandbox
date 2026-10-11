@@ -16,6 +16,7 @@ from lcm_sandbox.core.artifact_capture import cleanup_sandbox
 from lcm_sandbox.core.docker_launcher import (
     DEFAULT_IMAGE_TAG,
     FleetIdentity,
+    RemoteNode,
     ResourceLimits,
     container_status,
     launch_container,
@@ -143,8 +144,10 @@ def create(
 @click.option("--sandbox-id", required=True,
               help="Sandbox / run id. Used as the container name.")
 @click.option("--worktree-path", required=True,
-              type=click.Path(exists=True, file_okay=False),
-              help="Absolute host path to the prepared worktree (Phase 1 output).")
+              type=click.Path(file_okay=False),
+              help="Absolute path to the prepared worktree (Phase 1 output). "
+                   "Resolved on --node when that is set, so existence is "
+                   "checked there rather than here.")
 @click.option("--plan-id", default=None,
               help="Plan id. Defaults to sandbox-id when omitted.")
 @click.option("--branch", "branch_name", default="sandbox",
@@ -183,7 +186,7 @@ def create(
                    "<fleet-id>-<agent-name>, which is what the mailbox "
                    "contract expects; override only if you know why.")
 @click.option("--control-dir", default=None,
-              type=click.Path(exists=True, file_okay=False),
+              type=click.Path(file_okay=False),
               help="Host agentic-sandboxes run dir to bind-mount at /control "
                    "(plan.json, inbox/, status.json, events.jsonl, outbox/). "
                    "Without it the container's sandbox-emit writes nowhere "
@@ -194,6 +197,15 @@ def create(
               help="Container CPU cap, e.g. 2.0. Uncapped when omitted.")
 @click.option("--pids-limit", default=None, type=int,
               help="Container PID cap, e.g. 512. Uncapped when omitted.")
+@click.option("--remote-host", default=None,
+              help="Fleet host to RUN the container on (P3). Omit for this "
+                   "machine. NOTE: --worktree-path and --control-dir are then "
+                   "resolved on THAT host, not here. Distinct from --node-id, "
+                   "which is only the identity label baked into NODE_ID.")
+@click.option("--remote-user", default=None,
+              help="SSH user on --remote-host. Defaults to the ssh command's own.")
+@click.option("--ssh-command", default="tailscale ssh", show_default=True,
+              help="Transport used to reach --remote-host. Split on spaces.")
 def launch(
     sandbox_id: str,
     worktree_path: str,
@@ -218,8 +230,11 @@ def launch(
     memory: str | None,
     cpus: str | None,
     pids_limit: int | None,
+    remote_host: str | None,
+    remote_user: str | None,
+    ssh_command: str,
 ) -> None:
-    """Launch a sandbox container (Phase 4)."""
+    """Launch a sandbox container (Phase 4), locally or on a fleet node."""
     try:
         parsed_paths = json.loads(allowed_paths_json)
     except json.JSONDecodeError as exc:
@@ -231,7 +246,7 @@ def launch(
         config = SandboxConfig(
             plan_id=plan_id or sandbox_id,
             run_id=sandbox_id,
-            repo_path=Path(worktree_path).resolve(),
+            repo_path=Path(worktree_path),
             branch_name=branch_name,
             allowed_paths=AllowedPaths(**parsed_paths),
             timeout_minutes=timeout_minutes,
@@ -264,6 +279,11 @@ def launch(
         except ValueError as exc:
             _die(DockerLaunchError(str(exc), step="4.1"))
 
+    remote = None
+    if remote_host:
+        remote = RemoteNode(host=remote_host, user=remote_user,
+                            ssh_command=ssh_command.split())
+
     resource_limits = None
     if memory or cpus or pids_limit:
         resource_limits = ResourceLimits(
@@ -274,7 +294,8 @@ def launch(
         result = launch_container(
             config,
             image_tag=image_tag,
-            worktree_path=Path(worktree_path).resolve(),
+            worktree_path=(Path(worktree_path) if remote_host
+                           else Path(worktree_path).resolve()),
             hermes_persona=hermes_persona,
             mcp_url=mcp_url,
             mcp_token=mcp_token,
@@ -284,8 +305,9 @@ def launch(
             provider_api_key=provider_api_key,
             egress_allowlist=egress_allowlist or None,
             fleet_identity=fleet_identity,
-            control_dir=Path(control_dir).resolve() if control_dir else None,
+            control_dir=Path(control_dir) if control_dir else None,
             resource_limits=resource_limits,
+            remote=remote,
         )
     except SandboxError as exc:
         _die(exc)
