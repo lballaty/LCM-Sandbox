@@ -282,6 +282,21 @@ def _build_run_argv(
         "--tmpfs", "/var/tmp:rw,exec,nosuid,size=256m",
         "--tmpfs", "/run:rw,nosuid,size=64m",
         "--tmpfs", "/home/aiagent/.cache:rw,exec,nosuid,size=512m,uid=1000,gid=1000",
+        # 2026-10-11: the entrypoint's agent-profile step
+        # (scripts/apply_agent_profile.py:70) does
+        # `(~/.claude).mkdir(); settings.json.write_text()` on EVERY launch,
+        # because LCM_AGENT_PROFILE defaults to "permissive". The rootfs is
+        # --read-only, so aiagent needs a writable mount here or that write
+        # fails with EROFS.
+        # This is HALF the fix. The failure actually observed first was EACCES
+        # (errno 13), not EROFS: the step ran as ROOT, and --cap-drop=ALL
+        # removes CAP_DAC_OVERRIDE, so root could not write into
+        # /home/aiagent (drwxr-x--- aiagent). The other half is in
+        # scripts/entrypoint.sh, which now runs that step as aiagent.
+        # Scoped to .claude deliberately: a tmpfs over /home/aiagent would
+        # MASK the baked Hermes runtime (~/.hermes) and ~/.local/bin, taking
+        # hermes and agy with it.
+        "--tmpfs", "/home/aiagent/.claude:rw,nosuid,size=16m,uid=1000,gid=1000",
         "-v", f"{worktree_path}:/workspace:rw",
         "-e", f"PLAN_ID={sandbox_config.plan_id}",
         "-e", f"RUN_ID={sandbox_config.run_id}",

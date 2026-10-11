@@ -320,21 +320,38 @@ def launch(
 @click.option("--sandbox-id", required=True)
 @click.option("--keep/--remove", default=False,
               help="Keep the stopped container for post-mortem (default: remove).")
-def stop(sandbox_id: str, keep: bool) -> None:
+@click.option("--remote-host", default=None,
+              help="Fleet host the container runs on. Must match the host used "
+                   "at launch, or you are reaping a container that is not there.")
+@click.option("--remote-user", default=None)
+@click.option("--ssh-command", default="tailscale ssh", show_default=True)
+def stop(sandbox_id: str, keep: bool, remote_host: str | None,
+         remote_user: str | None, ssh_command: str) -> None:
     """Stop and (by default) remove a sandbox container.
 
     WP-3 will run artifact capture before invoking this; for now it's a teardown stub.
     """
-    payload = stop_container(sandbox_id, remove=not keep)
+    remote = (RemoteNode(host=remote_host, user=remote_user,
+                         ssh_command=ssh_command.split())
+              if remote_host else None)
+    payload = stop_container(sandbox_id, remove=not keep, remote=remote)
     click.echo(json.dumps(payload, indent=2))
     sys.exit(0 if payload.get("stopped") else 5)
 
 
 @main.command("status")
 @click.option("--sandbox-id", required=True)
-def status(sandbox_id: str) -> None:
+@click.option("--remote-host", default=None,
+              help="Fleet host the container runs on.")
+@click.option("--remote-user", default=None)
+@click.option("--ssh-command", default="tailscale ssh", show_default=True)
+def status(sandbox_id: str, remote_host: str | None, remote_user: str | None,
+           ssh_command: str) -> None:
     """Print the current status of a sandbox container as JSON."""
-    payload = container_status(sandbox_id)
+    remote = (RemoteNode(host=remote_host, user=remote_user,
+                         ssh_command=ssh_command.split())
+              if remote_host else None)
+    payload = container_status(sandbox_id, remote=remote)
     click.echo(json.dumps(payload, indent=2))
     sys.exit(0)
 

@@ -140,10 +140,25 @@ case "${LCM_AGENT_PROFILE}" in
   *) die "unknown LCM_AGENT_PROFILE='${LCM_AGENT_PROFILE}' (expected permissive|standard)" ;;
 esac
 if [ -x /opt/lcm-sandbox/apply_agent_profile.py ]; then
+  # Run AS aiagent, not as root.
+  #
+  # 2026-10-11: this ran as root and died with EACCES on
+  # /home/aiagent/.claude under every hardened launch. Root normally ignores
+  # mode bits via CAP_DAC_OVERRIDE, but the launcher passes --cap-drop=ALL
+  # (added in 7f5aca3), which removes it -- so root became subject to the
+  # bits like anyone else, and /home/aiagent is drwxr-x--- owned by aiagent.
+  # Root could not even traverse it. The entrypoint then hit
+  # "FATAL: apply_agent_profile failed" and the container exited before
+  # reaching Up, which is why the two integration tests have been red.
+  #
+  # Running as aiagent is also simply correct: this writes aiagent's OWN
+  # config. The alternatives were worse -- chmod 755 on the home dir widens
+  # it for no benefit, and --cap-add DAC_OVERRIDE gives back the capability
+  # the hardening exists to remove.
   LCM_PROFILE_TEMPLATE_DIR=/opt/lcm-sandbox/agent_profiles \
-    /opt/lcm-sandbox/apply_agent_profile.py \
-      --profile "${LCM_AGENT_PROFILE}" \
-      --target /home/aiagent \
+    runuser -s /bin/bash -c \
+      '/opt/lcm-sandbox/apply_agent_profile.py --profile '"${LCM_AGENT_PROFILE}"' --target /home/aiagent' \
+      aiagent \
     || die "apply_agent_profile failed"
   log "4.5.7a agent profile '${LCM_AGENT_PROFILE}' applied"
 else
