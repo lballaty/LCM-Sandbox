@@ -9,9 +9,16 @@
 #
 # SIZE BUDGET NOTE:
 #   The Hermes install adds ~3 GB to the image (Python venv with deps + Node 22 + 75 bundled skills).
-#   With base Ubuntu 24.04 + lcm-sandbox tooling, total image is ~3.94 GB — exceeds the 1.5 GB
-#   ceiling in SANDBOX-IMAGE-TOOLCHAIN.md. This is intentional for the Hermes variant; the standard
-#   lcm-dev-agent image is unaffected. Future work (out of scope for v1):
+#   MEASURED 2026-10-11: total image is 5.39 GB (1.47 GB unique, 3.93 GB shared base layers)
+#   via `docker system df -v` — NOT the ~3.94 GB previously recorded here. That older figure
+#   matches the SHARED base-layer size, so it looks like the base was measured rather than the
+#   image. Either way it understated the image by ~1.5 GB. Still exceeds the 1.5 GB ceiling in
+#   SANDBOX-IMAGE-TOOLCHAIN.md, and by more than was thought.
+#   Caution: `docker image inspect --format '{{.Size}}'` reports 1465262206 here, which is the
+#   unique-layer size, not the on-disk total. Do not quote it as the image size.
+#   This is intentional for the Hermes variant; the standard lcm-dev-agent image is unaffected.
+#   Note scripts/Dockerfile.fleet-worker now overlays THIS image, so every byte here is also
+#   paid by the fleet worker (7.51 GB total). Future work (out of scope for v1):
 #     - prune bundled Hermes skills via Hermes config flag (saves ~1-2 GB)
 #     - multi-stage build to drop build-time-only deps
 #     - or split into base lcm-dev-agent + lcm-hermes-overlay layered images

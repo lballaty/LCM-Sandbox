@@ -36,13 +36,28 @@
 # ACTION: FLEET-WORKER-SANDBOX-DEFINITION.md §7 should be updated to match;
 # it is stale, not merely differently-worded.
 #
-# COST, STATED PLAINLY: lcm-hermes-agent is already ~3.94 GB (see the SIZE
-# BUDGET note in Dockerfile.hermes). This overlay adds Node 20, three npm CLIs,
-# the agy binary and tmux on top. The worker image will be LARGE. That is a
-# deliberate trade of size for a single image that can run any agent role;
-# slimming (role-specific images, multi-stage) is D1 in the design doc and is
-# explicitly deferred. Do not "fix" the size by rebasing onto dev-sandbox —
+# COST — MEASURED 2026-10-11, superseding the estimate first written here.
+# I originally repeated "~3.94 GB" for the base from the stale SIZE BUDGET note
+# in Dockerfile.hermes. Both numbers were wrong. Actual, via
+# `docker system df -v`:
+#
+#   lcm-hermes-agent:latest   5.39 GB total  (1.47 GB unique)
+#   lcm-fleet-worker:latest   7.51 GB total  (3.58 GB unique)
+#   shared base layers        3.93 GB        (so both on disk = ~8.98 GB)
+#
+# The overlay itself costs ~2.1 GB; the Hermes base is the heavy part. So the
+# "will be LARGE" warning was right about the outcome and wrong about the
+# cause — trimming this file barely helps, and slimming has to happen in the
+# base or by not using Hermes as the base for non-Hermes roles.
+#
+# That makes D1 (role-specific slim images) a live constraint, not a deferred
+# nicety: 7.5 GB per disposable unit is a real cost once workers are pulled to
+# a remote fleet host. Still do NOT "fix" it by rebasing onto dev-sandbox —
 # that trades away the confinement, which is the point of the unit.
+#
+# Caution when re-measuring: `docker image inspect --format '{{.Size}}'`
+# reports 2103878267 (~2.1 GB) for this image, which is NOT the on-disk total.
+# Use `docker system df -v`.
 # ---------------------------------------------------------------------------
 
 ARG BASE_IMAGE=lcm-hermes-agent:latest

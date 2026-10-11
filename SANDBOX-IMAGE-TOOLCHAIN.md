@@ -97,6 +97,30 @@ Universal wins for the first cut because:
 
 **Hard ceiling:** 1.5 GB. If we exceed it, split into base + overlay.
 
+### MEASURED sizes, 2026-10-11 — the ceiling is breached
+
+The budget above is a target for `lcm-dev-agent`. The images that actually
+exist are far larger, and the ceiling's own remedy ("split into base + overlay")
+has already been taken without bringing the total back under it:
+
+| Image | Total | Unique | Notes |
+|---|---|---|---|
+| `lcm-hermes-agent:latest` | **5.39 GB** | 1.47 GB | Hermes runtime + 75 bundled skills |
+| `lcm-fleet-worker:latest` | **7.51 GB** | 3.58 GB | overlay on hermes: +Node 20, claude/codex/gemini, agy, tmux |
+
+They share 3.93 GB of base layers, so holding both costs ~8.98 GB, not 12.9 GB.
+The fleet-worker overlay itself is only ~2.1 GB; the Hermes base is what is
+heavy.
+
+Measured with `docker system df -v`. Note that `docker image inspect --format
+'{{.Size}}'` reports something smaller and is NOT the on-disk total — do not
+quote it as the image size.
+
+This makes D1 in `~/.ai-dev-dotfiles/design/FLEET-WORKER-SANDBOX-DEFINITION.md`
+(role-specific slim images vs one image carrying all CLIs) a live constraint
+rather than a future nicety: 7.5 GB per disposable worker is a real cost when
+units are pulled to a remote fleet host.
+
 ---
 
 ## Image build & versioning
