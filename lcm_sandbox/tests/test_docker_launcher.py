@@ -18,6 +18,8 @@ from lcm_sandbox.core import docker_launcher
 from lcm_sandbox.core.docker_launcher import (
     DEFAULT_IMAGE_TAG,
     HERMES_INTERNAL_PORT,
+    FleetIdentity,
+    ResourceLimits,
     _build_run_argv,
     launch_container,
     parse_egress_allowlist,
@@ -406,3 +408,131 @@ def test_build_argv_includes_egress_env_when_set(cfg, tmp_path):
     egress = [e for e in envs if e.startswith('LCM_EGRESS_ALLOWLIST=')]
     assert len(egress) == 1
     assert egress[0] == 'LCM_EGRESS_ALLOWLIST=api.openai.com:443,deb.nodesource.com'
+
+
+# ---------------------------------------------------------------------------
+# P2: fleet identity, /control mount, resource caps.
+#
+# These three were the gap between the lcm-fleet-worker IMAGE and the launcher:
+# the image declares FLEET_ID/AGENT_NAME/NODE_ID/QUEUECTL_AGENT empty and sets
+# CONTROL_DIR=/control, but nothing filled them in or mounted anything there,
+# so a worker could not resolve its own inbox and sandbox-emit wrote into the
+# container's ephemeral layer.
+# ---------------------------------------------------------------------------
+
+def _argv(cfg, worktree, **kw):
+    """_build_run_argv with the boilerplate Hermes args defaulted to None."""
+    base = dict(
+        sandbox_config=cfg,
+        image_tag=DEFAULT_IMAGE_TAG,
+        worktree_path=worktree,
+        hermes_persona=None,
+        mcp_url=None,
+        mcp_token=None,
+        model_provider=None,
+        model_key=None,
+        provider_api_key_env=None,
+        provider_api_key=None,
+    )
+    base.update(kw)
+    return _build_run_argv(**base)
+
+
+def _envs(argv):
+    return [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+
+
+def test_identity_absent_by_default(cfg, worktree):
+    """No identity requested => none injected. An empty-but-present var would
+    be worse than absent: it looks configured."""
+    envs = _envs(_argv(cfg, worktree))
+    for var in ("FLEET_ID=", "AGENT_NAME=", "NODE_ID=", "QUEUECTL_AGENT="):
+        assert not any(e.startswith(var) for e in envs), envs
+
+
+def test_identity_is_injected_when_given(cfg, worktree):
+    ident = FleetIdentity(fleet_id="tinychoir", agent_name="worker1",
+                          node_id="intel-macos-worker")
+    envs = _envs(_argv(cfg, worktree, fleet_identity=ident))
+    assert "FLEET_ID=tinychoir" in envs
+    assert "AGENT_NAME=worker1" in envs
+    assert "NODE_ID=intel-macos-worker" in envs
+
+
+def test_queuectl_agent_is_derived_as_the_composite(cfg, worktree):
+    """The mailbox contract expects <fleet>-<agent>. Deriving it stops an
+    agent's queue claims drifting away from its inbox."""
+    ident = FleetIdentity(fleet_id="tinychoir", agent_name="worker1",
+                          node_id="m4")
+    assert ident.queuectl_agent == "tinychoir-worker1"
+    assert "QUEUECTL_AGENT=tinychoir-worker1" in _envs(
+        _argv(cfg, worktree, fleet_identity=ident))
+
+
+def test_queuectl_agent_override_is_respected(cfg, worktree):
+    ident = FleetIdentity(fleet_id="f", agent_name="a", node_id="n",
+                          queuectl_agent="custom-id")
+    assert ident.queuectl_agent == "custom-id"
+
+
+@pytest.mark.parametrize("bad", [
+    "has space", "semi;colon", "", "a" * 65, "$(whoami)", "../escape",
+])
+def test_identity_rejects_unsafe_tokens(bad):
+    """These land in env vars, labels and queue claims; reject them at the
+    boundary rather than discovering them in a shell."""
+    with pytest.raises(ValueError):
+        FleetIdentity(fleet_id=bad, agent_name="a", node_id="n")
+
+
+def test_control_dir_is_mounted_rw(cfg, worktree, tmp_path):
+    control = tmp_path / "control"
+    control.mkdir()
+    argv = _argv(cfg, worktree, control_dir=control)
+    assert f"{control}:/control:rw" in argv, argv
+
+
+def test_control_dir_absent_by_default(cfg, worktree):
+    assert not any(":/control" in a for a in _argv(cfg, worktree))
+
+
+def test_launch_rejects_missing_control_dir(cfg, worktree, tmp_path):
+    """Docker would create it as root and the agent (uid 1000) could not
+    write; that surfaces as an empty outbox much later. Fail at launch."""
+    from lcm_sandbox.exceptions import DockerLaunchError
+    with pytest.raises(DockerLaunchError):
+        launch_container(
+            cfg,
+            worktree_path=worktree,
+            control_dir=tmp_path / "does-not-exist",
+        )
+
+
+def test_resource_limits_are_opt_in(cfg, worktree):
+    argv = _argv(cfg, worktree)
+    assert not any(a.startswith("--memory") for a in argv)
+    assert not any(a.startswith("--cpus") for a in argv)
+    assert not any(a.startswith("--pids-limit") for a in argv)
+
+
+def test_resource_limits_are_emitted_when_set(cfg, worktree):
+    argv = _argv(cfg, worktree,
+                 resource_limits=ResourceLimits(memory="4g", cpus="2.0",
+                                                pids_limit=512))
+    assert "--memory=4g" in argv
+    assert "--cpus=2.0" in argv
+    assert "--pids-limit=512" in argv
+
+
+def test_image_stays_the_last_positional_arg(cfg, worktree, tmp_path):
+    """Everything added here is a flag. If any of it landed after the image
+    name docker would treat it as the container command."""
+    control = tmp_path / "c"
+    control.mkdir()
+    argv = _argv(
+        cfg, worktree,
+        fleet_identity=FleetIdentity(fleet_id="f", agent_name="a", node_id="n"),
+        control_dir=control,
+        resource_limits=ResourceLimits(memory="1g"),
+    )
+    assert argv[-1] == DEFAULT_IMAGE_TAG

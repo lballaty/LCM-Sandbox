@@ -59,6 +59,85 @@ _EGRESS_ALLOWLIST_ENTRY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9.\-]*(?::[0-9]{1,5})?$"
 )
 
+# Fleet identity tokens end up in env vars, container labels and queue claims,
+# so keep them to a boring, shell- and filename-safe alphabet.
+_FLEET_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+class FleetIdentity(BaseModel):
+    """Who this worker unit IS, injected at launch (never baked in the image).
+
+    This is the "on-what-basis" chain from
+    ~/.ai-dev-dotfiles/design/FLEET-WORKER-SANDBOX-DEFINITION.md §4: without it
+    a worker cannot tell which fleet it belongs to or which inbox is its, so
+    the standing "read your inbox" rule has no referent. The lcm-fleet-worker
+    image declares all four vars EMPTY precisely so that a container with no
+    identity is obviously unconfigured rather than silently impersonating the
+    last one.
+
+    ``queuectl_agent`` is the composite ``<fleet_id>-<agent_name>`` required by
+    the fleet mailbox contract. It is derived when omitted rather than left to
+    each caller to assemble, because an inconsistent agent id silently splits
+    an agent's queue claims from its inbox.
+    """
+
+    fleet_id: str
+    agent_name: str
+    node_id: str
+    queuectl_agent: str | None = None
+
+    def model_post_init(self, _context: object) -> None:
+        for field in ("fleet_id", "agent_name", "node_id"):
+            value = getattr(self, field)
+            if not _FLEET_TOKEN_RE.match(value):
+                raise ValueError(
+                    f"fleet identity {field}={value!r} is not a safe token "
+                    "(expected [A-Za-z0-9][A-Za-z0-9._-]{0,63})"
+                )
+        derived = f"{self.fleet_id}-{self.agent_name}"
+        if self.queuectl_agent is None:
+            object.__setattr__(self, "queuectl_agent", derived)
+        elif not _FLEET_TOKEN_RE.match(self.queuectl_agent):
+            raise ValueError(
+                f"fleet identity queuectl_agent={self.queuectl_agent!r} is not "
+                "a safe token"
+            )
+
+    def as_env_args(self) -> list[str]:
+        """The four identity vars as `docker run -e` arguments."""
+        return [
+            "-e", f"FLEET_ID={self.fleet_id}",
+            "-e", f"AGENT_NAME={self.agent_name}",
+            "-e", f"NODE_ID={self.node_id}",
+            "-e", f"QUEUECTL_AGENT={self.queuectl_agent}",
+        ]
+
+
+class ResourceLimits(BaseModel):
+    """Per-container resource caps.
+
+    OPT-IN, and deliberately not defaulted. The acceptance criteria in
+    FLEET-CONTROL-PLANE-AND-ISOLATION-DESIGN.md §10 call for resource caps, but
+    picking a default here without measuring what a worker actually consumes
+    would risk OOM-killing a working agent mid-task — trading a known gap for
+    an unknown failure. Set them explicitly once a real worker run has been
+    profiled; `None` means "no cap", which is today's behaviour unchanged.
+    """
+
+    memory: str | None = None       # e.g. "4g"
+    cpus: str | None = None         # e.g. "2.0"
+    pids_limit: int | None = None   # e.g. 512
+
+    def as_run_args(self) -> list[str]:
+        args: list[str] = []
+        if self.memory:
+            args += [f"--memory={self.memory}"]
+        if self.cpus:
+            args += [f"--cpus={self.cpus}"]
+        if self.pids_limit:
+            args += [f"--pids-limit={self.pids_limit}"]
+        return args
+
 
 def parse_egress_allowlist(spec: str | None) -> list[tuple[str, int | None]]:
     """Parse `--egress-allowlist` comma-separated value into (host, port) tuples.
@@ -105,6 +184,9 @@ def _build_run_argv(
     provider_api_key_env: str | None,
     provider_api_key: str | None,
     egress_allowlist: list[tuple[str, int | None]] | None = None,
+    fleet_identity: FleetIdentity | None = None,
+    control_dir: Path | None = None,
+    resource_limits: ResourceLimits | None = None,
 ) -> list[str]:
     """Construct the `docker run` argv per STEP 4.1-4.3.
 
@@ -124,6 +206,14 @@ def _build_run_argv(
       - Network is the default bridge unless `egress_allowlist` is set;
         when set, the launcher attaches the container to a pre-built
         restricted bridge and the entrypoint adds iptables rules.
+      - `fleet_identity`, when given, injects the four L0 identity vars. The
+        lcm-fleet-worker image ships them EMPTY, so without this a worker
+        cannot resolve its own inbox.
+      - `control_dir`, when given, bind-mounts the agentic-sandboxes run dir
+        at `/control`. The image already sets `CONTROL_DIR=/control` and ships
+        `sandbox-emit`; without the mount those write into the container's
+        own ephemeral filesystem and the host sees nothing.
+      - `resource_limits` is opt-in; see ResourceLimits.
     """
     allowed_paths_json = json.dumps(
         sandbox_config.allowed_paths.model_dump(),
@@ -184,6 +274,22 @@ def _build_run_argv(
         )
         argv += ["-e", f"LCM_EGRESS_ALLOWLIST={encoded}"]
 
+    # Fleet identity (L0). Injected, never baked: a value in the image would
+    # make every container from it claim the same identity, which breaks the
+    # uniqueness rule in ~/.ai-dev-dotfiles/docs/FLEET-NAMING-AND-IDENTITY.md.
+    if fleet_identity is not None:
+        argv += fleet_identity.as_env_args()
+
+    # Control plane (L2). The agentic-sandboxes run dir carries plan.json and
+    # inbox/ inbound, and status.json / events.jsonl / outbox/ outbound. The
+    # container is `--read-only`, so without this rw mount `sandbox-emit` has
+    # nowhere durable to write and the run is unobservable from the host.
+    if control_dir is not None:
+        argv += ["-v", f"{control_dir}:/control:rw"]
+
+    if resource_limits is not None:
+        argv += resource_limits.as_run_args()
+
     # NOTE: `--user aiagent` is omitted because the entrypoint must run as root
     # to chmod/chown the bind-mounted /workspace (STEP 4.5.2/4.5.3). The
     # entrypoint drops to aiagent before launching Hermes.
@@ -204,6 +310,9 @@ def launch_container(
     provider_api_key_env: str | None = None,
     provider_api_key: str | None = None,
     egress_allowlist: list[tuple[str, int | None]] | None = None,
+    fleet_identity: FleetIdentity | None = None,
+    control_dir: Path | None = None,
+    resource_limits: ResourceLimits | None = None,
     launch_timeout_seconds: int = 60,
 ) -> ContainerLaunchResult:
     """Launch a sandbox container and verify it reaches "Up" state.
@@ -215,6 +324,17 @@ def launch_container(
             "worktree_path does not exist",
             step="4.2",
             worktree_path=str(worktree_path),
+        )
+
+    # Fail before `docker run` rather than after. Docker would happily create
+    # the directory as root, and the agent (uid 1000) would then find /control
+    # unwritable — surfacing much later as an empty outbox rather than as a
+    # launch error.
+    if control_dir is not None and not control_dir.exists():
+        raise DockerLaunchError(
+            "control_dir does not exist",
+            step="4.2",
+            control_dir=str(control_dir),
         )
 
     argv = _build_run_argv(
@@ -229,6 +349,9 @@ def launch_container(
         provider_api_key_env=provider_api_key_env,
         provider_api_key=provider_api_key,
         egress_allowlist=egress_allowlist,
+        fleet_identity=fleet_identity,
+        control_dir=control_dir,
+        resource_limits=resource_limits,
     )
 
     started_at = datetime.now(timezone.utc)

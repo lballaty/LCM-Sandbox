@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import uuid
 from pathlib import Path
@@ -14,6 +15,8 @@ from lcm_sandbox.commands.create import create_sandbox
 from lcm_sandbox.core.artifact_capture import cleanup_sandbox
 from lcm_sandbox.core.docker_launcher import (
     DEFAULT_IMAGE_TAG,
+    FleetIdentity,
+    ResourceLimits,
     container_status,
     launch_container,
     parse_egress_allowlist,
@@ -166,6 +169,31 @@ def create(
                    'to reach. Advisory until the host-side restricted bridge '
                    'is wired up; the value is forwarded as LCM_EGRESS_ALLOWLIST '
                    'env var so the entrypoint can install rules where supported.')
+@click.option("--fleet-id", default=None,
+              help="Fleet this worker belongs to. Required with --agent-name; "
+                   "together they give the unit its identity so it can resolve "
+                   "its own inbox. The lcm-fleet-worker image ships these empty.")
+@click.option("--agent-name", default=None,
+              help="This worker's agent name within the fleet (for example "
+                   "'worker1'). Required with --fleet-id.")
+@click.option("--node-id", default=None,
+              help="Host the unit runs on. Defaults to the local hostname.")
+@click.option("--queuectl-agent", default=None,
+              help="Override the queue identity. Defaults to the composite "
+                   "<fleet-id>-<agent-name>, which is what the mailbox "
+                   "contract expects; override only if you know why.")
+@click.option("--control-dir", default=None,
+              type=click.Path(exists=True, file_okay=False),
+              help="Host agentic-sandboxes run dir to bind-mount at /control "
+                   "(plan.json, inbox/, status.json, events.jsonl, outbox/). "
+                   "Without it the container's sandbox-emit writes nowhere "
+                   "the host can see.")
+@click.option("--memory", default=None,
+              help="Container memory cap, e.g. 4g. Uncapped when omitted.")
+@click.option("--cpus", default=None,
+              help="Container CPU cap, e.g. 2.0. Uncapped when omitted.")
+@click.option("--pids-limit", default=None, type=int,
+              help="Container PID cap, e.g. 512. Uncapped when omitted.")
 def launch(
     sandbox_id: str,
     worktree_path: str,
@@ -182,6 +210,14 @@ def launch(
     provider_api_key_env: str | None,
     provider_api_key: str | None,
     egress_allowlist_spec: str | None,
+    fleet_id: str | None,
+    agent_name: str | None,
+    node_id: str | None,
+    queuectl_agent: str | None,
+    control_dir: str | None,
+    memory: str | None,
+    cpus: str | None,
+    pids_limit: int | None,
 ) -> None:
     """Launch a sandbox container (Phase 4)."""
     try:
@@ -208,6 +244,32 @@ def launch(
     except ValueError as exc:
         _die(DockerLaunchError(str(exc), step="4.1", spec=egress_allowlist_spec))
 
+    # Identity is all-or-nothing. A unit with a fleet but no agent name (or
+    # vice versa) cannot address an inbox, and half-populating the vars would
+    # look configured while being useless — fail at launch instead.
+    fleet_identity = None
+    if fleet_id or agent_name:
+        if not (fleet_id and agent_name):
+            _die(DockerLaunchError(
+                "--fleet-id and --agent-name must be given together",
+                step="4.1", fleet_id=fleet_id, agent_name=agent_name,
+            ))
+        try:
+            fleet_identity = FleetIdentity(
+                fleet_id=fleet_id,
+                agent_name=agent_name,
+                node_id=node_id or socket.gethostname(),
+                queuectl_agent=queuectl_agent,
+            )
+        except ValueError as exc:
+            _die(DockerLaunchError(str(exc), step="4.1"))
+
+    resource_limits = None
+    if memory or cpus or pids_limit:
+        resource_limits = ResourceLimits(
+            memory=memory, cpus=cpus, pids_limit=pids_limit,
+        )
+
     try:
         result = launch_container(
             config,
@@ -221,6 +283,9 @@ def launch(
             provider_api_key_env=provider_api_key_env,
             provider_api_key=provider_api_key,
             egress_allowlist=egress_allowlist or None,
+            fleet_identity=fleet_identity,
+            control_dir=Path(control_dir).resolve() if control_dir else None,
+            resource_limits=resource_limits,
         )
     except SandboxError as exc:
         _die(exc)
